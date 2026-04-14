@@ -1,7 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { useUrlFilters, nullIfEmpty } from "@/lib/useUrlFilters";
+import { FiltersPanel, FilterOption } from "@/components/FiltersPanel";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -9,8 +11,8 @@ import {
 
 const ORANGE = "#FF8200";
 
-export default function PhysicianDetailPage({ params }: { params: { npi: string } }) {
-  const { npi } = params;
+function PhysicianDetail({ npi }: { npi: string }) {
+  const { state, updateFilters, updateDates, preserveSearch } = useUrlFilters();
   const [overview, setOverview] = useState<any>(null);
   const [trend, setTrend] = useState<any[]>([]);
   const [byClinic, setByClinic] = useState<any[]>([]);
@@ -19,12 +21,27 @@ export default function PhysicianDetailPage({ params }: { params: { npi: string 
   const [byDx, setByDx] = useState<any[]>([]);
   const [discharge, setDischarge] = useState<any[]>([]);
   const [recentCases, setRecentCases] = useState<any[]>([]);
+  const [filterOptions, setFilterOptions] = useState<FilterOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Simple date range state — default all-time
-  const rangeEnd = new Date().toISOString().slice(0, 10);
-  const rangeStart = "2024-01-01";
+  const rangeStart = state.currStart || "2024-01-01";
+  const rangeEnd = state.currEnd || new Date().toISOString().slice(0, 10);
+
+  const filterPayload = {
+    source_filter: nullIfEmpty(state.filters.sources),
+    payer_filter: nullIfEmpty(state.filters.payers),
+    clinic_filter: nullIfEmpty(state.filters.clinics),
+    therapist_filter: nullIfEmpty(state.filters.therapists),
+    dx_filter: nullIfEmpty(state.filters.diagnoses),
+    status_filter: nullIfEmpty(state.filters.statuses),
+  };
+
+  useEffect(() => {
+    supabase.rpc("rpc_filter_options").then(({ data }) => {
+      if (data) setFilterOptions(data);
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,13 +50,13 @@ export default function PhysicianDetailPage({ params }: { params: { npi: string 
       try {
         const [o, t, bc, bt, bp, bd, dr, rc] = await Promise.all([
           supabase.rpc("rpc_physician_overview", { p_npi: npi }),
-          supabase.rpc("rpc_physician_monthly_trend", { p_npi: npi }),
-          supabase.rpc("rpc_physician_by_clinic", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd }),
-          supabase.rpc("rpc_physician_by_therapist", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd }),
-          supabase.rpc("rpc_physician_by_payer", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd }),
-          supabase.rpc("rpc_physician_by_dx", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd }),
-          supabase.rpc("rpc_physician_discharge_reasons", { p_npi: npi }),
-          supabase.rpc("rpc_physician_recent_cases", { p_npi: npi, row_limit: 50 }),
+          supabase.rpc("rpc_physician_monthly_trend", { p_npi: npi, ...filterPayload }),
+          supabase.rpc("rpc_physician_by_clinic", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd, ...filterPayload }),
+          supabase.rpc("rpc_physician_by_therapist", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd, ...filterPayload }),
+          supabase.rpc("rpc_physician_by_payer", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd, ...filterPayload }),
+          supabase.rpc("rpc_physician_by_dx", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd, ...filterPayload }),
+          supabase.rpc("rpc_physician_discharge_reasons", { p_npi: npi, ...filterPayload }),
+          supabase.rpc("rpc_physician_recent_cases", { p_npi: npi, row_limit: 50, ...filterPayload }),
         ]);
         if (cancelled) return;
         const firstErr = o.error || t.error || bc.error || bt.error || bp.error || bd.error || dr.error || rc.error;
@@ -58,13 +75,15 @@ export default function PhysicianDetailPage({ params }: { params: { npi: string 
       }
     })();
     return () => { cancelled = true; };
-  }, [npi]);
+  }, [npi, rangeStart, rangeEnd, JSON.stringify(state.filters)]);
+
+  const activeFilterCount = Object.values(state.filters).reduce((s, a) => s + a.length, 0);
 
   return (
     <div className="min-h-screen p-4">
       <div className="max-w-7xl mx-auto">
         <div className="mb-3">
-          <Link href="/" className="text-sm hover:underline" style={{ color: ORANGE }}>← Back to dashboard</Link>
+          <Link href={`/${preserveSearch}`} className="text-sm hover:underline" style={{ color: ORANGE }}>← Back to dashboard</Link>
         </div>
 
         <header className="bg-black rounded-t-lg px-6 py-4">
@@ -78,28 +97,38 @@ export default function PhysicianDetailPage({ params }: { params: { npi: string 
               {overview.specialty ?? "Specialty unknown"} · {overview.credential ?? ""} · {[overview.city, overview.state].filter(Boolean).join(", ")} {overview.phone ? `· ${overview.phone}` : ""}
             </div>
           )}
+          {activeFilterCount > 0 && (
+            <div className="text-xs text-yellow-300 mt-1">⚠ {activeFilterCount} filter{activeFilterCount !== 1 ? "s" : ""} from dashboard are applied to all drill-down views below</div>
+          )}
         </header>
+
+        <div className="bg-white border-x border-b px-6 py-3 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-xs text-gray-500">Date range:</span>
+          <input type="date" value={rangeStart} onChange={e => updateDates({ currStart: e.target.value })} className="border rounded px-2 py-1 text-xs" />
+          <span className="text-gray-400">→</span>
+          <input type="date" value={rangeEnd} onChange={e => updateDates({ currEnd: e.target.value })} className="border rounded px-2 py-1 text-xs" />
+        </div>
+        <FiltersPanel filters={state.filters} options={filterOptions} onChange={updateFilters} />
 
         {loading && <div className="bg-white rounded-b-lg p-12 text-center text-gray-500">Loading…</div>}
         {error && <div className="bg-red-50 border border-red-200 rounded p-4 m-4 text-red-800">Error: {error}</div>}
 
         {!loading && !error && overview && (
           <div className="bg-white rounded-b-lg shadow-lg p-4 space-y-6">
-            {/* Headline stats */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              <Stat label="Total cases" value={overview.total_cases} />
-              <Stat label="Total visits" value={overview.total_visits} />
+              <Stat label="Total cases (all-time)" value={overview.total_cases} />
+              <Stat label="Total visits (all-time)" value={overview.total_visits} />
               <Stat label="Avg visits / case" value={overview.total_cases > 0 ? (overview.total_visits / overview.total_cases).toFixed(1) : "0"} />
               <Stat label="Clinics used" value={overview.locations_used} />
               <Stat label="Outcome reports sent" value={overview.outcome_reports_sent} color={overview.outcome_reports_sent > 0 ? "#16A34A" : "#CC0000"} />
             </div>
             <div className="text-xs text-gray-500">
               First referral: {overview.first_case_date ?? "—"} · Last referral: {overview.last_case_date ?? "—"}
+              {activeFilterCount > 0 && " (Headline stats are unfiltered all-time; all panels below respect active filters.)"}
             </div>
 
-            {/* Monthly trend */}
             <div className="border rounded p-3">
-              <h3 className="font-bold mb-2" style={{ color: ORANGE }}>Monthly trend (all time)</h3>
+              <h3 className="font-bold mb-2" style={{ color: ORANGE }}>Monthly trend{activeFilterCount > 0 ? " (filtered)" : " (all time)"}</h3>
               <ResponsiveContainer width="100%" height={240}>
                 <LineChart data={trend}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
@@ -144,7 +173,7 @@ export default function PhysicianDetailPage({ params }: { params: { npi: string 
             </div>
 
             {discharge.length > 0 && (
-              <Breakdown title="Discharge reasons (matured cases)" rows={discharge} cols={[
+              <Breakdown title="Discharge reasons" rows={discharge} cols={[
                 ["Reason", r => r.discharge_reason],
                 ["Cases", r => r.cases],
                 ["% of total", r => r.pct + "%"],
@@ -190,6 +219,14 @@ export default function PhysicianDetailPage({ params }: { params: { npi: string 
         )}
       </div>
     </div>
+  );
+}
+
+export default function PhysicianDetailPage({ params }: { params: { npi: string } }) {
+  return (
+    <Suspense fallback={<div className="p-12 text-center text-gray-500">Loading…</div>}>
+      <PhysicianDetail npi={params.npi} />
+    </Suspense>
   );
 }
 

@@ -123,6 +123,7 @@ export default function Dashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [urlInitialized, setUrlInitialized] = useState(false);
+  const preserveSearch = searchParams.toString() ? `?${searchParams.toString()}` : "";
 
   // Data state
   const [tab, setTab] = useState<string>("Overview");
@@ -522,7 +523,7 @@ export default function Dashboard() {
                         {locations.map((r, i) => (
                           <tr key={r.location} className={i % 2 === 0 ? "bg-white" : "bg-orange-50"}>
                             <td className="px-3 py-2 font-semibold">
-                              <Link href={`/location/${LOC_SLUG[r.location] ?? "morristown"}`} className="hover:underline" style={{ color: ORANGE }}>
+                              <Link href={`/location/${LOC_SLUG[r.location] ?? "morristown"}${preserveSearch}`} className="hover:underline" style={{ color: ORANGE }}>
                                 {r.short_name}
                               </Link>
                             </td>
@@ -559,13 +560,13 @@ export default function Dashboard() {
               </div>
             )}
 
-            {!loading && !error && tab === "Physicians" && <PhysiciansTab physicians={physicians} />}
-            {!loading && !error && tab === "Call Sheet" && <CallSheetTab rows={callSheet} />}
+            {!loading && !error && tab === "Physicians" && <PhysiciansTab physicians={physicians} preserveSearch={preserveSearch} />}
+            {!loading && !error && tab === "Call Sheet" && <CallSheetTab rows={callSheet} preserveSearch={preserveSearch} />}
             {!loading && !error && tab === "Alerts" && (
               <div className="space-y-6">
-                <AlertTable title="🔴 Gone Dark (includes departed)" rows={goneDark} color="#CC0000" />
-                <AlertTable title="🟠 Sharp / 🟡 Moderate Decline" rows={sharpDecline} color="#EA580C" />
-                <AlertTable title="🌱🚀 Growth" rows={growth} color="#16A34A" />
+                <AlertTable title="🔴 Gone Dark (includes departed)" rows={goneDark} color="#CC0000" preserveSearch={preserveSearch} />
+                <AlertTable title="🟠 Sharp / 🟡 Moderate Decline" rows={sharpDecline} color="#EA580C" preserveSearch={preserveSearch} />
+                <AlertTable title="🌱🚀 Growth" rows={growth} color="#16A34A" preserveSearch={preserveSearch} />
               </div>
             )}
           </div>
@@ -578,7 +579,7 @@ export default function Dashboard() {
   );
 }
 
-function PhysiciansTab({ physicians }: { physicians: PhysicianRow[] }) {
+function PhysiciansTab({ physicians, preserveSearch }: { physicians: PhysicianRow[]; preserveSearch: string }) {
   const [filter, setFilter] = useState("");
   const rows = physicians.filter((r) =>
     !filter ||
@@ -606,7 +607,7 @@ function PhysiciansTab({ physicians }: { physicians: PhysicianRow[] }) {
               <tr key={r.npi + i} className={i % 2 === 0 ? "bg-white" : "bg-orange-50"}>
                 <td className="px-3 py-1">{i + 1}</td>
                 <td className="px-3 py-1 font-semibold">
-                  <Link href={`/physician/${r.npi}`} className="hover:underline" style={{ color: ORANGE }}>
+                  <Link href={`/physician/${r.npi}${preserveSearch}`} className="hover:underline" style={{ color: ORANGE }}>
                     {r.physician ?? r.npi}
                   </Link>
                   {r.departed ? " (departed)" : ""}
@@ -630,7 +631,7 @@ function PhysiciansTab({ physicians }: { physicians: PhysicianRow[] }) {
   );
 }
 
-function CallSheetTab({ rows }: { rows: any[] }) {
+function CallSheetTab({ rows, preserveSearch }: { rows: any[]; preserveSearch: string }) {
   const [pf, setPf] = useState<string>("All");
   const filters = ["All", "Critical", "High", "Medium"];
   const visible = rows.filter(r => pf === "All" || r.priority === pf);
@@ -661,7 +662,7 @@ function CallSheetTab({ rows }: { rows: any[] }) {
                 <td className="px-2 py-2 font-semibold">{r.priority}</td>
                 <td className="px-2 py-2 text-xs">{r.category}</td>
                 <td className="px-2 py-2 font-semibold">
-                  <Link href={`/physician/${r.npi}`} className="hover:underline" style={{ color: ORANGE }}>
+                  <Link href={`/physician/${r.npi}${preserveSearch}`} className="hover:underline" style={{ color: ORANGE }}>
                     {r.physician ?? r.npi}
                   </Link>
                 </td>
@@ -678,7 +679,7 @@ function CallSheetTab({ rows }: { rows: any[] }) {
   );
 }
 
-function AlertTable({ title, rows, color }: { title: string; rows: PhysicianRow[]; color: string }) {
+function AlertTable({ title, rows, color, preserveSearch }: { title: string; rows: PhysicianRow[]; color: string; preserveSearch: string }) {
   return (
     <div className="bg-white rounded-lg shadow overflow-hidden border border-gray-200">
       <div className="px-4 py-3 font-bold text-white" style={{ backgroundColor: color }}>{title} ({rows.length})</div>
@@ -695,7 +696,7 @@ function AlertTable({ title, rows, color }: { title: string; rows: PhysicianRow[
             {rows.map((r, i) => (
               <tr key={r.npi + i} style={r.departed ? { opacity: 0.5 } : {}}>
                 <td className="px-3 py-2 font-semibold">
-                  <Link href={`/physician/${r.npi}`} className="hover:underline" style={{ color: ORANGE }}>
+                  <Link href={`/physician/${r.npi}${preserveSearch}`} className="hover:underline" style={{ color: ORANGE }}>
                     {r.physician ?? r.npi}
                   </Link>
                 </td>

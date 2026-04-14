@@ -1,7 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { useUrlFilters, nullIfEmpty } from "@/lib/useUrlFilters";
+import { FiltersPanel, FilterOption } from "@/components/FiltersPanel";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -10,7 +12,6 @@ import {
 const ORANGE = "#FF8200";
 const BLACK = "#000000";
 
-// slug → full facility name
 function slugToFacility(slug: string) {
   const map: Record<string, string> = {
     "morristown": "Tristar PT - Morristown",
@@ -25,28 +26,42 @@ function slugToFacility(slug: string) {
   return map[slug] ?? slug;
 }
 
-const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
-const today = () => new Date();
-const startOfYear = (d: Date) => new Date(d.getFullYear(), 0, 1);
-const minusOneYear = (d: Date) => new Date(d.getFullYear() - 1, d.getMonth(), d.getDate());
+const startOfYearStr = () => `${new Date().getFullYear()}-01-01`;
+const todayStr = () => new Date().toISOString().slice(0, 10);
 
-export default function LocationDetailPage({ params }: { params: { slug: string } }) {
-  const { slug } = params;
+function LocationDetail({ slug }: { slug: string }) {
   const facility = slugToFacility(slug);
+  const { state, updateFilters, updateDates, preserveSearch } = useUrlFilters();
   const [overview, setOverview] = useState<any>(null);
   const [topMDs, setTopMDs] = useState<any[]>([]);
   const [byTherapist, setByTherapist] = useState<any[]>([]);
   const [byPayer, setByPayer] = useState<any[]>([]);
   const [trend, setTrend] = useState<any[]>([]);
   const [discharge, setDischarge] = useState<any[]>([]);
+  const [filterOptions, setFilterOptions] = useState<FilterOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Date range — YTD vs prior year
-  const [rangeStart, setRangeStart] = useState(fmtDate(startOfYear(today())));
-  const [rangeEnd, setRangeEnd] = useState(fmtDate(today()));
-  const [priorStart, setPriorStart] = useState(fmtDate(minusOneYear(startOfYear(today()))));
-  const [priorEnd, setPriorEnd] = useState(fmtDate(minusOneYear(today())));
+  const rangeStart = state.currStart || startOfYearStr();
+  const rangeEnd = state.currEnd || todayStr();
+  const priorStart = state.priorStart || `${new Date().getFullYear() - 1}-01-01`;
+  const priorEnd = state.priorEnd || (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 1); return d.toISOString().slice(0, 10); })();
+
+  const filterPayload = {
+    source_filter: nullIfEmpty(state.filters.sources),
+    payer_filter: nullIfEmpty(state.filters.payers),
+    specialty_filter: nullIfEmpty(state.filters.specialties),
+    therapist_filter: nullIfEmpty(state.filters.therapists),
+    npi_filter: nullIfEmpty(state.filters.npis),
+    dx_filter: nullIfEmpty(state.filters.diagnoses),
+    status_filter: nullIfEmpty(state.filters.statuses),
+  };
+
+  useEffect(() => {
+    supabase.rpc("rpc_filter_options").then(({ data }) => {
+      if (data) setFilterOptions(data);
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,12 +69,12 @@ export default function LocationDetailPage({ params }: { params: { slug: string 
     (async () => {
       try {
         const [o, top, bt, bp, tr, dr] = await Promise.all([
-          supabase.rpc("rpc_location_overview", { p_facility: facility, range_start: rangeStart, range_end: rangeEnd, prior_start: priorStart, prior_end: priorEnd }),
-          supabase.rpc("rpc_location_top_referrers", { p_facility: facility, range_start: rangeStart, range_end: rangeEnd, prior_start: priorStart, prior_end: priorEnd, row_limit: 25 }),
-          supabase.rpc("rpc_location_by_therapist", { p_facility: facility, range_start: rangeStart, range_end: rangeEnd }),
-          supabase.rpc("rpc_location_by_payer", { p_facility: facility, range_start: rangeStart, range_end: rangeEnd }),
-          supabase.rpc("rpc_location_monthly_trend", { p_facility: facility }),
-          supabase.rpc("rpc_location_discharge_reasons", { p_facility: facility }),
+          supabase.rpc("rpc_location_overview", { p_facility: facility, range_start: rangeStart, range_end: rangeEnd, prior_start: priorStart, prior_end: priorEnd, ...filterPayload }),
+          supabase.rpc("rpc_location_top_referrers", { p_facility: facility, range_start: rangeStart, range_end: rangeEnd, prior_start: priorStart, prior_end: priorEnd, row_limit: 25, ...filterPayload }),
+          supabase.rpc("rpc_location_by_therapist", { p_facility: facility, range_start: rangeStart, range_end: rangeEnd, ...filterPayload }),
+          supabase.rpc("rpc_location_by_payer", { p_facility: facility, range_start: rangeStart, range_end: rangeEnd, ...filterPayload }),
+          supabase.rpc("rpc_location_monthly_trend", { p_facility: facility, ...filterPayload }),
+          supabase.rpc("rpc_location_discharge_reasons", { p_facility: facility, ...filterPayload }),
         ]);
         if (cancelled) return;
         const firstErr = o.error || top.error || bt.error || bp.error || tr.error || dr.error;
@@ -76,7 +91,7 @@ export default function LocationDetailPage({ params }: { params: { slug: string 
       }
     })();
     return () => { cancelled = true; };
-  }, [facility, rangeStart, rangeEnd, priorStart, priorEnd]);
+  }, [facility, rangeStart, rangeEnd, priorStart, priorEnd, JSON.stringify(state.filters)]);
 
   const yoyBadge = (curr: number, prior: number) => {
     if (!prior) return curr > 0 ? "NEW" : "—";
@@ -84,11 +99,13 @@ export default function LocationDetailPage({ params }: { params: { slug: string 
     return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
   };
 
+  const activeFilterCount = Object.values(state.filters).reduce((s, a) => s + a.length, 0);
+
   return (
     <div className="min-h-screen p-4">
       <div className="max-w-7xl mx-auto">
         <div className="mb-3">
-          <Link href="/" className="text-sm hover:underline" style={{ color: ORANGE }}>← Back to dashboard</Link>
+          <Link href={`/${preserveSearch}`} className="text-sm hover:underline" style={{ color: ORANGE }}>← Back to dashboard</Link>
         </div>
 
         <header className="bg-black rounded-t-lg px-6 py-4">
@@ -96,24 +113,27 @@ export default function LocationDetailPage({ params }: { params: { slug: string 
           <div className="text-gray-300 text-sm">
             Current: {rangeStart} → {rangeEnd} · Prior: {priorStart} → {priorEnd}
           </div>
+          {activeFilterCount > 0 && (
+            <div className="text-xs text-yellow-300 mt-1">⚠ {activeFilterCount} filter{activeFilterCount !== 1 ? "s" : ""} applied from dashboard</div>
+          )}
         </header>
 
-        {/* Date controls */}
         <div className="bg-white border-x border-b px-6 py-3 flex flex-wrap items-center gap-2 text-sm">
           <span className="font-semibold text-gray-700 mr-2">Range:</span>
           <div className="flex items-center gap-1">
             <span className="text-xs text-gray-500">Curr:</span>
-            <input type="date" value={rangeStart} onChange={e => setRangeStart(e.target.value)} className="border rounded px-2 py-1 text-xs" />
+            <input type="date" value={rangeStart} onChange={e => updateDates({ currStart: e.target.value })} className="border rounded px-2 py-1 text-xs" />
             <span className="text-gray-400">→</span>
-            <input type="date" value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} className="border rounded px-2 py-1 text-xs" />
+            <input type="date" value={rangeEnd} onChange={e => updateDates({ currEnd: e.target.value })} className="border rounded px-2 py-1 text-xs" />
           </div>
           <div className="flex items-center gap-1 ml-3">
             <span className="text-xs text-gray-500">Prior:</span>
-            <input type="date" value={priorStart} onChange={e => setPriorStart(e.target.value)} className="border rounded px-2 py-1 text-xs" />
+            <input type="date" value={priorStart} onChange={e => updateDates({ priorStart: e.target.value })} className="border rounded px-2 py-1 text-xs" />
             <span className="text-gray-400">→</span>
-            <input type="date" value={priorEnd} onChange={e => setPriorEnd(e.target.value)} className="border rounded px-2 py-1 text-xs" />
+            <input type="date" value={priorEnd} onChange={e => updateDates({ priorEnd: e.target.value })} className="border rounded px-2 py-1 text-xs" />
           </div>
         </div>
+        <FiltersPanel filters={state.filters} options={filterOptions} onChange={updateFilters} />
 
         {loading && <div className="bg-white rounded-b-lg p-12 text-center text-gray-500">Loading…</div>}
         {error && <div className="bg-red-50 border border-red-200 rounded p-4 m-4 text-red-800">Error: {error}</div>}
@@ -132,7 +152,7 @@ export default function LocationDetailPage({ params }: { params: { slug: string 
             </div>
 
             <div className="border rounded p-3">
-              <h3 className="font-bold mb-2" style={{ color: ORANGE }}>Monthly case volume (all time)</h3>
+              <h3 className="font-bold mb-2" style={{ color: ORANGE }}>Monthly case volume{activeFilterCount > 0 ? " (filtered)" : " (all time)"}</h3>
               <ResponsiveContainer width="100%" height={240}>
                 <LineChart data={trend}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
@@ -165,7 +185,7 @@ export default function LocationDetailPage({ params }: { params: { slug: string 
                       <tr key={r.npi + i} className={i % 2 === 0 ? "bg-white" : "bg-orange-50"} style={r.departed ? { opacity: 0.5 } : {}}>
                         <td className="px-2 py-1">{i + 1}</td>
                         <td className="px-2 py-1 font-semibold">
-                          <Link href={`/physician/${r.npi}`} className="hover:underline" style={{ color: ORANGE }}>
+                          <Link href={`/physician/${r.npi}${preserveSearch}`} className="hover:underline" style={{ color: ORANGE }}>
                             {r.physician ?? r.npi}
                           </Link>
                           {r.departed && <span className="ml-2 text-red-600 text-xs">❌</span>}
@@ -201,7 +221,7 @@ export default function LocationDetailPage({ params }: { params: { slug: string 
             </div>
 
             {discharge.length > 0 && (
-              <Breakdown title="Discharge reasons (all time)" rows={discharge} cols={[
+              <Breakdown title="Discharge reasons" rows={discharge} cols={[
                 ["Reason", r => r.discharge_reason],
                 ["Cases", r => r.cases],
                 ["% of total", r => r.pct + "%"],
@@ -211,6 +231,14 @@ export default function LocationDetailPage({ params }: { params: { slug: string 
         )}
       </div>
     </div>
+  );
+}
+
+export default function LocationDetailPage({ params }: { params: { slug: string } }) {
+  return (
+    <Suspense fallback={<div className="p-12 text-center text-gray-500">Loading…</div>}>
+      <LocationDetail slug={params.slug} />
+    </Suspense>
   );
 }
 
