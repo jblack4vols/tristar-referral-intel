@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 
 const ORANGE = "#FF8200";
 
@@ -39,6 +39,26 @@ export function FiltersPanel({ filters, options, onChange }: Props) {
   const [search, setSearch] = useState<Record<Dim, string>>({
     sources: "", payers: "", clinics: "", specialties: "", therapists: "", npis: "", diagnoses: "", statuses: "",
   });
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click or Escape
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   const byDim = useMemo(() => {
     const m: Record<string, FilterOption[]> = {};
@@ -69,7 +89,7 @@ export function FiltersPanel({ filters, options, onChange }: Props) {
   };
 
   return (
-    <div className="bg-white border-x border-b px-6 py-3 text-sm relative">
+    <div ref={rootRef} className="bg-white border-x border-b px-6 py-3 text-sm relative">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-semibold text-gray-700 mr-1">Filters:</span>
         {DIM_MAP.map(({ key, dbKey, shortLabel }) => {

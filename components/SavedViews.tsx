@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const ORANGE = "#FF8200";
 const STORAGE_KEY = "tristar-referral-saved-views";
@@ -33,8 +33,23 @@ export function SavedViews({ currentSearch, onLoad }: Props) {
   const [views, setViews] = useState<SavedView[]>([]);
   const [open, setOpen] = useState(false);
   const [newName, setNewName] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setViews(loadAll()); }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   const save = () => {
     if (!newName.trim()) return;
@@ -58,7 +73,7 @@ export function SavedViews({ currentSearch, onLoad }: Props) {
   };
 
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       <button onClick={() => setOpen(o => !o)} className="px-3 py-1 rounded text-xs bg-gray-100 hover:bg-gray-200">
         📑 Views ({views.length}) ▾
       </button>
