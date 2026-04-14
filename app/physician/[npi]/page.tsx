@@ -4,6 +4,8 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { useUrlFilters, nullIfEmpty } from "@/lib/useUrlFilters";
 import { FiltersPanel, FilterOption } from "@/components/FiltersPanel";
+import { PhysicianNotes, PhysicianActivities } from "@/components/PhysicianExtras";
+import { downloadCsv } from "@/lib/export";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -170,6 +172,11 @@ function PhysicianDetail({ npi }: { npi: string }) {
                 ["Cases", r => r.cases],
                 ["Avg V/E", r => r.avg_ve],
               ]} />
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <PhysicianNotes npi={npi} />
+              <PhysicianActivities npi={npi} />
             </div>
 
             {discharge.length > 0 && (

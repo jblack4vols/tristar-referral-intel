@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { FiltersPanel, FilterState, FilterOption } from "./FiltersPanel";
 import { SavedViews } from "./SavedViews";
+import { downloadCsv, fmtCurrency, fmtCurrencyCompact, TRISTAR_CONSTANTS } from "@/lib/export";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -344,7 +345,11 @@ export default function Dashboard() {
     return rows;
   }, [physicians]);
 
-  const tabs = ["Overview", "Locations", "Physicians", "Call Sheet", "Alerts"];
+  const tabs = ["Overview", "Locations", "Physicians", "Call Sheet", "Alerts", "Churn"];
+  const [churnRows, setChurnRows] = useState<any[]>([]);
+  useEffect(() => { supabase.rpc("rpc_all_churn_scores").then(({ data }) => { if (data) setChurnRows(data); }); }, []);
+  const { RPV, CPV } = TRISTAR_CONSTANTS;
+  const marginPerVisit = RPV - CPV;
 
   return (
     <div className="min-h-screen p-4">
@@ -364,7 +369,11 @@ export default function Dashboard() {
                 currentSearch={typeof window !== "undefined" ? window.location.search : ""}
                 onLoad={(search) => router.replace("/" + search, { scroll: false })}
               />
-              <Link href="/discharges" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Outcome queue</Link>
+              <Link href="/weekly" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">📄 Weekly</Link>
+              <Link href="/discharges" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Outcomes</Link>
+              <Link href="/zero-visits" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Zero-visit</Link>
+              <Link href="/workers-comp" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">WC</Link>
+              <Link href="/medical-director" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Med Director</Link>
               <Link href="/upload" className="px-2 py-1 text-xs font-semibold rounded text-white" style={{ backgroundColor: ORANGE }}>+ Upload</Link>
             </div>
           </div>
@@ -473,10 +482,10 @@ export default function Dashboard() {
                     sub={`vs ${s.prior_total_cases ?? 0} prior`} color={ORANGE} />
                   <Kpi label="Physician Referrals (with NPI)" value={(s.curr_doc_referrals ?? 0).toLocaleString()}
                     sub={`${yoy >= 0 ? "+" : ""}${yoy.toFixed(1)}% vs ${s.prior_doc_referrals ?? 0}`} color={ORANGE} />
-                  <Kpi label="Unique Physicians" value={s.curr_unique_physicians ?? 0}
-                    sub={`vs ${s.prior_unique_physicians ?? 0} prior`} color={ORANGE} />
-                  <Kpi label="Created → Arrived" value={`${convCurr.toFixed(1)}%`}
-                    sub={`Prior: ${convPrior.toFixed(1)}%`} color={ORANGE} />
+                  <Kpi label="Revenue (est.)" value={fmtCurrencyCompact((curr.arrived || 0) * RPV)}
+                    sub={`${(curr.arrived||0).toLocaleString()} visits × $${RPV} RPV`} color="#16A34A" />
+                  <Kpi label="Gross margin (est.)" value={fmtCurrencyCompact((curr.arrived || 0) * marginPerVisit)}
+                    sub={`${(curr.arrived||0).toLocaleString()} visits × $${marginPerVisit} margin`} color="#16A34A" />
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                   <Kpi label="🔴 Gone Dark" value={s.gone_dark_actionable ?? 0} sub="excl. departed" color="#CC0000" />
@@ -569,6 +578,8 @@ export default function Dashboard() {
                 <AlertTable title="🌱🚀 Growth" rows={growth} color="#16A34A" preserveSearch={preserveSearch} />
               </div>
             )}
+
+            {!loading && !error && tab === "Churn" && <ChurnTab rows={churnRows} preserveSearch={preserveSearch} />}
           </div>
         </div>
         <footer className="text-center text-xs text-gray-600 mt-3 pb-4">
@@ -590,8 +601,11 @@ function PhysiciansTab({ physicians, preserveSearch }: { physicians: PhysicianRo
   ).slice(0, 200);
   return (
     <div>
-      <input placeholder="Search physician, NPI, payer, location..." value={filter} onChange={e => setFilter(e.target.value)}
-        className="w-full px-3 py-2 border rounded mb-3" />
+      <div className="flex gap-2 mb-3">
+        <input placeholder="Search physician, NPI, payer, location..." value={filter} onChange={e => setFilter(e.target.value)}
+          className="flex-1 px-3 py-2 border rounded" />
+        <button onClick={() => downloadCsv(rows, "physicians")} className="px-3 py-2 text-xs rounded bg-gray-100 hover:bg-gray-200">📥 CSV</button>
+      </div>
       <div className="bg-white rounded-lg shadow overflow-auto border border-gray-200">
         <table className="w-full text-sm">
           <thead style={{ backgroundColor: ORANGE, color: "white" }}>
@@ -705,6 +719,67 @@ function AlertTable({ title, rows, color, preserveSearch }: { title: string; row
                 <td className="px-3 py-2 text-right">{r.evals_curr}</td>
                 <td className="px-3 py-2 text-xs">{r.decline_flag ?? r.growth_flag}</td>
                 <td className="px-3 py-2 text-xs">{r.departed ? "❌ Departed — do not contact" : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ChurnTab({ rows, preserveSearch }: { rows: any[]; preserveSearch: string }) {
+  const [filter, setFilter] = useState("");
+  const [riskFilter, setRiskFilter] = useState<string>("All");
+  const risks = ["All", "High", "Elevated", "Watch", "Low"];
+  const visible = rows.filter((r: any) =>
+    (riskFilter === "All" || r.risk_tier === riskFilter) &&
+    (!filter || (r.physician ?? "").toLowerCase().includes(filter.toLowerCase()) || r.npi.includes(filter))
+  );
+  const color = (t: string) => ({ High: "#CC0000", Elevated: "#EA580C", Watch: "#D97706", Low: "#16A34A" } as any)[t] || "#666";
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-3 items-center">
+        <input placeholder="Search physician, NPI…" value={filter} onChange={e => setFilter(e.target.value)}
+          className="border rounded px-3 py-1 text-sm flex-1 min-w-60" />
+        {risks.map(r => (
+          <button key={r} onClick={() => setRiskFilter(r)}
+            className={"px-3 py-1 rounded text-xs " + (riskFilter === r ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
+            style={riskFilter === r ? { backgroundColor: ORANGE } : {}}>
+            {r} ({r === "All" ? rows.length : rows.filter((x: any) => x.risk_tier === r).length})
+          </button>
+        ))}
+        <button onClick={() => downloadCsv(visible, `churn-scores`)} className="px-3 py-1 rounded text-xs bg-gray-100 hover:bg-gray-200">📥 CSV</button>
+      </div>
+      <div className="bg-white rounded-lg shadow overflow-auto border">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-100 sticky top-0">
+            <tr>
+              <th className="px-2 py-2 text-left">Physician</th>
+              <th className="px-2 py-2 text-left">NPI</th>
+              <th className="px-2 py-2 text-right">Score</th>
+              <th className="px-2 py-2 text-left">Risk</th>
+              <th className="px-2 py-2 text-right">Days since</th>
+              <th className="px-2 py-2 text-right">Last 30 refs</th>
+              <th className="px-2 py-2 text-right">Monthly avg</th>
+              <th className="px-2 py-2 text-right">Payer A %</th>
+              <th className="px-2 py-2 text-right">Total refs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.slice(0, 200).map((r, i) => (
+              <tr key={r.npi + i} className={i % 2 === 0 ? "bg-white" : "bg-orange-50"}>
+                <td className="px-2 py-2 font-semibold">
+                  <Link href={`/physician/${r.npi}${preserveSearch}`} className="hover:underline" style={{ color: ORANGE }}>{r.physician ?? r.npi}</Link>
+                </td>
+                <td className="px-2 py-2 font-mono text-xs">{r.npi}</td>
+                <td className="px-2 py-2 text-right font-bold" style={{ color: color(r.risk_tier) }}>{r.churn_score?.toFixed(0) ?? "—"}</td>
+                <td className="px-2 py-2 text-xs font-semibold" style={{ color: color(r.risk_tier) }}>{r.risk_tier}</td>
+                <td className="px-2 py-2 text-right">{r.days_since_last_referral ?? "—"}</td>
+                <td className="px-2 py-2 text-right">{r.last_30_refs}</td>
+                <td className="px-2 py-2 text-right">{r.monthly_avg}</td>
+                <td className="px-2 py-2 text-right">{r.payer_a_pct}%</td>
+                <td className="px-2 py-2 text-right text-gray-500">{r.total_referrals}</td>
               </tr>
             ))}
           </tbody>
