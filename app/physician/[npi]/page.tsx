@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useState } from "react";
-import { use } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import {
@@ -10,8 +9,8 @@ import {
 
 const ORANGE = "#FF8200";
 
-export default function PhysicianDetailPage({ params }: { params: Promise<{ npi: string }> }) {
-  const { npi } = use(params);
+export default function PhysicianDetailPage({ params }: { params: { npi: string } }) {
+  const { npi } = params;
   const [overview, setOverview] = useState<any>(null);
   const [trend, setTrend] = useState<any[]>([]);
   const [byClinic, setByClinic] = useState<any[]>([]);

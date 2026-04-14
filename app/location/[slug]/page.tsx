@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useState } from "react";
-import { use } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import {
@@ -31,8 +30,8 @@ const today = () => new Date();
 const startOfYear = (d: Date) => new Date(d.getFullYear(), 0, 1);
 const minusOneYear = (d: Date) => new Date(d.getFullYear() - 1, d.getMonth(), d.getDate());
 
-export default function LocationDetailPage({ params }: { params: Promise<{ slug: string }> }) {
-  const { slug } = use(params);
+export default function LocationDetailPage({ params }: { params: { slug: string } }) {
+  const { slug } = params;
   const facility = slugToFacility(slug);
   const [overview, setOverview] = useState<any>(null);
   const [topMDs, setTopMDs] = useState<any[]>([]);
