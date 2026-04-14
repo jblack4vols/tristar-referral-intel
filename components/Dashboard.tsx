@@ -34,6 +34,8 @@ type SummaryRow = {
   curr_start: string; curr_end: string; prior_start: string; prior_end: string;
 };
 
+type SourceRow = { source: string; total_cases: number };
+
 const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
 const today = () => new Date();
 const startOfYear = (d: Date) => new Date(d.getFullYear(), 0, 1);
@@ -66,6 +68,11 @@ export default function Dashboard() {
   const [priorStart, setPriorStart] = useState<string>(fmtDate(minusOneYear(startOfYear(today()))));
   const [priorEnd, setPriorEnd] = useState<string>(fmtDate(minusOneYear(today())));
   const [bounds, setBounds] = useState<{ min: string; max: string } | null>(null);
+
+  // Source filter state
+  const [sources, setSources] = useState<SourceRow[]>([]);
+  const [selectedSources, setSelectedSources] = useState<string[]>(["Doctors Office"]); // default to physicians
+  const [sourcesMenuOpen, setSourcesMenuOpen] = useState(false);
 
   // Data state
   const [tab, setTab] = useState<string>("Overview");
@@ -102,31 +109,36 @@ export default function Dashboard() {
     setPriorStart(fmtDate(ps)); setPriorEnd(fmtDate(pe));
   }, []);
 
-  // Load date bounds once
+  // Load date bounds + available sources once
   useEffect(() => {
-    supabase.rpc("rpc_date_bounds").then(({ data, error }) => {
+    supabase.rpc("rpc_date_bounds").then(({ data }) => {
       if (data && data.length > 0) {
         setBounds({ min: data[0].min_date, max: data[0].max_date });
       }
     });
+    supabase.rpc("rpc_referral_sources").then(({ data }) => {
+      if (data) setSources(data);
+    });
   }, []);
 
-  // Load all data when dates change
+  // Load all data when dates or sources change
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     const load = async () => {
-      const params = { curr_start: currStart, curr_end: currEnd, prior_start: priorStart, prior_end: priorEnd };
+      // null = all sources; empty array also means all
+      const filter = selectedSources.length === 0 ? null : selectedSources;
+      const params: any = { curr_start: currStart, curr_end: currEnd, prior_start: priorStart, prior_end: priorEnd, source_filter: filter };
       const trendRange = currStart < priorStart ? currStart : priorStart;
       const trendEnd = currEnd > priorEnd ? currEnd : priorEnd;
       try {
         const [s, p, l, f, m] = await Promise.all([
-          supabase.rpc("rpc_summary", params),
-          supabase.rpc("rpc_physician_stats", params),
-          supabase.rpc("rpc_location_scorecard", params),
-          supabase.rpc("rpc_funnel", params),
-          supabase.rpc("rpc_monthly_trend", { range_start: trendRange, range_end: trendEnd }),
+          supabase.rpc("rpc_summary_v2", params),
+          supabase.rpc("rpc_physician_stats_v2", params),
+          supabase.rpc("rpc_location_scorecard_v2", params),
+          supabase.rpc("rpc_funnel_v2", params),
+          supabase.rpc("rpc_monthly_trend_v2", { range_start: trendRange, range_end: trendEnd, source_filter: filter }),
         ]);
         if (cancelled) return;
         const firstError = s.error || p.error || l.error || f.error || m.error;
@@ -147,7 +159,19 @@ export default function Dashboard() {
     };
     load();
     return () => { cancelled = true; };
-  }, [currStart, currEnd, priorStart, priorEnd]);
+  }, [currStart, currEnd, priorStart, priorEnd, selectedSources]);
+
+  // Helpers for source filter UI
+  const toggleSource = (src: string) => {
+    setSelectedSources(prev => prev.includes(src) ? prev.filter(s => s !== src) : [...prev, src]);
+  };
+  const selectAllSources = () => setSelectedSources([]);
+  const selectOnlyDoctors = () => setSelectedSources(["Doctors Office"]);
+  const sourcesLabel = selectedSources.length === 0
+    ? "All sources"
+    : selectedSources.length === 1
+      ? selectedSources[0]
+      : `${selectedSources.length} sources`;
 
   const curr = funnel.find((f) => f.period === "curr") || { created: 0, scheduled: 0, arrived: 0, evaluated: 0 };
   const prior = funnel.find((f) => f.period === "prior") || { created: 0, scheduled: 0, arrived: 0, evaluated: 0 };
@@ -248,6 +272,42 @@ export default function Dashboard() {
           )}
         </div>
 
+        {/* Referral source filter */}
+        <div className="bg-white border-x border-b px-6 py-3 flex flex-wrap items-center gap-2 text-sm relative">
+          <span className="font-semibold text-gray-700 mr-2">Sources:</span>
+          <button onClick={selectAllSources}
+            className={"px-3 py-1 rounded text-xs " + (selectedSources.length === 0 ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
+            style={selectedSources.length === 0 ? { backgroundColor: ORANGE } : {}}>
+            All sources
+          </button>
+          <button onClick={selectOnlyDoctors}
+            className={"px-3 py-1 rounded text-xs " + (selectedSources.length === 1 && selectedSources[0] === "Doctors Office" ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
+            style={selectedSources.length === 1 && selectedSources[0] === "Doctors Office" ? { backgroundColor: ORANGE } : {}}>
+            Doctors Office only
+          </button>
+          <button onClick={() => setSourcesMenuOpen(o => !o)}
+            className="px-3 py-1 rounded text-xs bg-gray-100 hover:bg-gray-200">
+            Custom: {sourcesLabel} {sourcesMenuOpen ? "▲" : "▼"}
+          </button>
+          {sourcesMenuOpen && (
+            <div className="absolute top-full left-6 mt-1 z-10 bg-white border rounded shadow-lg p-3 max-h-80 overflow-auto min-w-[280px]">
+              <div className="text-xs font-semibold text-gray-500 mb-2">Toggle sources to include</div>
+              {sources.map(s => (
+                <label key={s.source} className="flex items-center gap-2 py-1 hover:bg-gray-50 px-2 rounded cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedSources.includes(s.source)}
+                    onChange={() => toggleSource(s.source)}
+                  />
+                  <span className="text-sm flex-1">{s.source}</span>
+                  <span className="text-xs text-gray-500">{s.total_cases.toLocaleString()}</span>
+                </label>
+              ))}
+              <button onClick={() => setSourcesMenuOpen(false)} className="mt-2 text-xs text-gray-500 hover:text-gray-700">Close</button>
+            </div>
+          )}
+        </div>
+
         <div className="bg-white rounded-b-lg shadow-lg">
           <div className="px-4 pt-3 flex gap-1 border-b overflow-x-auto">
             {tabs.map((t) => <Tab key={t} active={tab === t} onClick={() => setTab(t)}>{t}</Tab>)}
@@ -260,20 +320,21 @@ export default function Dashboard() {
             {!loading && !error && tab === "Overview" && (
               <div className="space-y-6">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <Kpi label="Physician Referrals" value={(s.curr_doc_referrals ?? 0).toLocaleString()}
-                    sub={`${yoy >= 0 ? "+" : ""}${yoy.toFixed(1)}% vs prior · ${s.prior_doc_referrals ?? 0}`} color={ORANGE} />
+                  <Kpi label="Total Cases Created" value={(s.curr_total_cases ?? 0).toLocaleString()}
+                    sub={`vs ${s.prior_total_cases ?? 0} prior`} color={ORANGE} />
+                  <Kpi label="Physician Referrals (with NPI)" value={(s.curr_doc_referrals ?? 0).toLocaleString()}
+                    sub={`${yoy >= 0 ? "+" : ""}${yoy.toFixed(1)}% vs ${s.prior_doc_referrals ?? 0}`} color={ORANGE} />
                   <Kpi label="Unique Physicians" value={s.curr_unique_physicians ?? 0}
                     sub={`vs ${s.prior_unique_physicians ?? 0} prior`} color={ORANGE} />
                   <Kpi label="Created → Arrived" value={`${convCurr.toFixed(1)}%`}
                     sub={`Prior: ${convPrior.toFixed(1)}%`} color={ORANGE} />
-                  <Kpi label="Gone Dark (actionable)" value={s.gone_dark_actionable ?? 0}
-                    sub="excluding confirmed departed" color="#CC0000" />
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <Kpi label="🌱 New Relationships" value={s.new_relationships ?? 0} sub="≥5 evals, 0 prior" color="#16A34A" />
-                  <Kpi label="🚀 Rising Stars" value={s.rising_stars ?? 0} sub="≥50% YoY growth" color="#16A34A" />
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                  <Kpi label="🔴 Gone Dark" value={s.gone_dark_actionable ?? 0} sub="excl. departed" color="#CC0000" />
                   <Kpi label="🟠 Sharp Declines" value={s.sharp_decline_count ?? 0} sub=">50% drop" color="#EA580C" />
                   <Kpi label="🟡 Moderate Declines" value={s.moderate_decline_count ?? 0} sub="20-50% drop" color="#D97706" />
+                  <Kpi label="🌱 New Relationships" value={s.new_relationships ?? 0} sub="≥5 evals, 0 prior" color="#16A34A" />
+                  <Kpi label="🚀 Rising Stars" value={s.rising_stars ?? 0} sub="≥50% YoY growth" color="#16A34A" />
                 </div>
                 <div className="bg-white rounded-lg shadow p-4 border border-gray-200">
                   <h3 className="font-bold mb-2" style={{ color: ORANGE }}>Monthly Referral Volume (covers both periods)</h3>
