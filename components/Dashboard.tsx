@@ -1,10 +1,22 @@
 "use client";
 import { useState, useMemo, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
+
+const LOC_SLUG: Record<string, string> = {
+  "Tristar PT - Morristown": "morristown",
+  "Tristar PT - Maryville": "maryville",
+  "Tristar PT - Bean Station": "bean-station",
+  "Tristar PT - Newport": "newport",
+  "Tristar PT - Jefferson City": "jefferson-city",
+  "Tristar PT - Rogersville": "rogersville",
+  "Tristar PT - New Tazewell": "new-tazewell",
+  "Tristar PT - Johnson City": "johnson-city",
+};
 
 const ORANGE = "#FF8200";
 const BLACK = "#000000";
@@ -227,7 +239,10 @@ export default function Dashboard() {
           <div className="text-right text-sm text-gray-300">
             <div>{(s.curr_doc_referrals ?? 0).toLocaleString()} physician referrals</div>
             <div>{s.curr_unique_physicians ?? 0} unique physicians</div>
-            <a href="/upload" className="inline-block mt-1 px-2 py-1 text-xs font-semibold rounded text-white" style={{ backgroundColor: ORANGE }}>+ Upload report</a>
+            <div className="flex gap-1 mt-1 justify-end">
+              <Link href="/discharges" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Outcome queue</Link>
+              <Link href="/upload" className="px-2 py-1 text-xs font-semibold rounded text-white" style={{ backgroundColor: ORANGE }}>+ Upload</Link>
+            </div>
           </div>
         </header>
 
@@ -373,7 +388,11 @@ export default function Dashboard() {
                       <tbody>
                         {locations.map((r, i) => (
                           <tr key={r.location} className={i % 2 === 0 ? "bg-white" : "bg-orange-50"}>
-                            <td className="px-3 py-2 font-semibold">{r.short_name}</td>
+                            <td className="px-3 py-2 font-semibold">
+                              <Link href={`/location/${LOC_SLUG[r.location] ?? "morristown"}`} className="hover:underline" style={{ color: ORANGE }}>
+                                {r.short_name}
+                              </Link>
+                            </td>
                             <td className="px-3 py-2 text-right">{r.evals_curr}</td>
                             <td className="px-3 py-2 text-right text-gray-500">{r.evals_prior}</td>
                             <td className="px-3 py-2 text-right font-semibold" style={{ color: r.yoy_pct == null ? "#16A34A" : r.yoy_pct >= 0 ? "#16A34A" : "#CC0000" }}>
@@ -453,7 +472,12 @@ function PhysiciansTab({ physicians }: { physicians: PhysicianRow[] }) {
             {rows.map((r, i) => (
               <tr key={r.npi + i} className={i % 2 === 0 ? "bg-white" : "bg-orange-50"}>
                 <td className="px-3 py-1">{i + 1}</td>
-                <td className="px-3 py-1 font-semibold">{r.physician ?? r.npi}{r.departed ? " (departed)" : ""}</td>
+                <td className="px-3 py-1 font-semibold">
+                  <Link href={`/physician/${r.npi}`} className="hover:underline" style={{ color: ORANGE }}>
+                    {r.physician ?? r.npi}
+                  </Link>
+                  {r.departed ? " (departed)" : ""}
+                </td>
                 <td className="px-3 py-1 font-mono text-xs">{r.npi}</td>
                 <td className="px-3 py-1 text-right">{r.evals_curr}</td>
                 <td className="px-3 py-1 text-right">{r.evals_prior}</td>
@@ -503,7 +527,11 @@ function CallSheetTab({ rows }: { rows: any[] }) {
               <tr key={r.npi + i} style={{ backgroundColor: bg(r.priority) }}>
                 <td className="px-2 py-2 font-semibold">{r.priority}</td>
                 <td className="px-2 py-2 text-xs">{r.category}</td>
-                <td className="px-2 py-2 font-semibold">{r.physician ?? r.npi}</td>
+                <td className="px-2 py-2 font-semibold">
+                  <Link href={`/physician/${r.npi}`} className="hover:underline" style={{ color: ORANGE }}>
+                    {r.physician ?? r.npi}
+                  </Link>
+                </td>
                 <td className="px-2 py-2 font-mono text-xs">{r.npi}</td>
                 <td className="px-2 py-2 text-right">{r.evals_prior}</td>
                 <td className="px-2 py-2 text-right">{r.evals_curr}</td>
@@ -533,7 +561,11 @@ function AlertTable({ title, rows, color }: { title: string; rows: PhysicianRow[
           <tbody>
             {rows.map((r, i) => (
               <tr key={r.npi + i} style={r.departed ? { opacity: 0.5 } : {}}>
-                <td className="px-3 py-2 font-semibold">{r.physician ?? r.npi}</td>
+                <td className="px-3 py-2 font-semibold">
+                  <Link href={`/physician/${r.npi}`} className="hover:underline" style={{ color: ORANGE }}>
+                    {r.physician ?? r.npi}
+                  </Link>
+                </td>
                 <td className="px-3 py-2 font-mono text-xs">{r.npi}</td>
                 <td className="px-3 py-2 text-right">{r.evals_prior}</td>
                 <td className="px-3 py-2 text-right">{r.evals_curr}</td>
