@@ -1,5 +1,6 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { supabase } from "@/lib/supabase";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -9,47 +10,37 @@ const ORANGE = "#FF8200";
 const BLACK = "#000000";
 
 type PhysicianRow = {
-  npi: string;
-  physician: string | null;
-  specialty: string | null;
-  practice_city: string | null;
-  practice_state: string | null;
-  departed: boolean | null;
-  evals_curr: number;
-  evals_prior: number;
-  visits_curr: number;
-  visits_prior: number;
-  dominant_payer: string | null;
-  payer_a_pct: number;
-  locations: string | null;
-  yoy_pct: number;
-  decline_flag: string | null;
-  growth_flag: string | null;
+  npi: string; physician: string | null; specialty: string | null;
+  practice_city: string | null; practice_state: string | null; departed: boolean | null;
+  evals_curr: number; evals_prior: number; visits_curr: number; visits_prior: number;
+  dominant_payer: string | null; payer_a_pct: number; locations: string | null;
+  yoy_pct: number; decline_flag: string | null; growth_flag: string | null;
 };
 
 type LocationRow = {
-  location: string;
-  short_name: string;
-  evals_curr: number;
-  evals_prior: number;
-  yoy_pct: number | null;
-  unique_mds: number;
-  top_md_name: string | null;
-  top_md_evals: number | null;
-  top_md_pct: number;
-  gone_dark_count: number;
-  rising_stars_count: number;
+  location: string; short_name: string;
+  evals_curr: number; evals_prior: number; yoy_pct: number | null;
+  unique_mds: number; top_md_name: string | null;
+  top_md_evals: number | null; top_md_pct: number;
+  gone_dark_count: number; rising_stars_count: number;
 };
 
-type Props = {
-  data: {
-    summary: any;
-    physicians: PhysicianRow[];
-    locations: LocationRow[];
-    monthly: { month: string; evals: number }[];
-    funnel: { period: string; created: number; scheduled: number; arrived: number; evaluated: number }[];
-  };
+type SummaryRow = {
+  curr_total_cases: number; prior_total_cases: number;
+  curr_doc_referrals: number; prior_doc_referrals: number;
+  curr_unique_physicians: number; prior_unique_physicians: number;
+  gone_dark_actionable: number; sharp_decline_count: number; moderate_decline_count: number;
+  new_relationships: number; rising_stars: number;
+  curr_start: string; curr_end: string; prior_start: string; prior_end: string;
 };
+
+const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
+const today = () => new Date();
+const startOfYear = (d: Date) => new Date(d.getFullYear(), 0, 1);
+const minusOneYear = (d: Date) => new Date(d.getFullYear() - 1, d.getMonth(), d.getDate());
+const isoDate = (s: string) => new Date(s + "T00:00:00");
+
+type Preset = "ytd" | "this-month" | "last-90" | "last-12mo" | "custom";
 
 const Kpi = ({ label, value, sub, color }: any) => (
   <div className="bg-white rounded-lg shadow p-4 border-l-4" style={{ borderColor: color || ORANGE }}>
@@ -60,35 +51,119 @@ const Kpi = ({ label, value, sub, color }: any) => (
 );
 
 const Tab = ({ active, onClick, children }: any) => (
-  <button
-    onClick={onClick}
+  <button onClick={onClick}
     className={"px-4 py-2 font-semibold text-sm rounded-t-lg transition-colors whitespace-nowrap " + (active ? "text-white" : "text-gray-700 bg-gray-100 hover:bg-gray-200")}
-    style={active ? { backgroundColor: ORANGE } : {}}
-  >
+    style={active ? { backgroundColor: ORANGE } : {}}>
     {children}
   </button>
 );
 
-export default function Dashboard({ data }: Props) {
+export default function Dashboard() {
+  // Date range state
+  const [preset, setPreset] = useState<Preset>("ytd");
+  const [currStart, setCurrStart] = useState<string>(fmtDate(startOfYear(today())));
+  const [currEnd, setCurrEnd] = useState<string>(fmtDate(today()));
+  const [priorStart, setPriorStart] = useState<string>(fmtDate(minusOneYear(startOfYear(today()))));
+  const [priorEnd, setPriorEnd] = useState<string>(fmtDate(minusOneYear(today())));
+  const [bounds, setBounds] = useState<{ min: string; max: string } | null>(null);
+
+  // Data state
   const [tab, setTab] = useState<string>("Overview");
-  const tabs = ["Overview", "Locations", "Physicians", "Call Sheet", "Alerts"];
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [summary, setSummary] = useState<SummaryRow | null>(null);
+  const [physicians, setPhysicians] = useState<PhysicianRow[]>([]);
+  const [locations, setLocations] = useState<LocationRow[]>([]);
+  const [monthly, setMonthly] = useState<{ month: string; evals: number }[]>([]);
+  const [funnel, setFunnel] = useState<{ period: string; created: number; scheduled: number; arrived: number; evaluated: number }[]>([]);
 
-  const s = data.summary || {};
-  const curr = data.funnel.find((f) => f.period === "curr") || { created: 0, scheduled: 0, arrived: 0, evaluated: 0 };
-  const prior = data.funnel.find((f) => f.period === "prior") || { created: 0, scheduled: 0, arrived: 0, evaluated: 0 };
+  // Apply preset
+  const applyPreset = useCallback((p: Preset) => {
+    setPreset(p);
+    const t = today();
+    let cs: Date, ce: Date, ps: Date, pe: Date;
+    if (p === "ytd") {
+      cs = startOfYear(t); ce = t;
+      ps = minusOneYear(cs); pe = minusOneYear(ce);
+    } else if (p === "this-month") {
+      cs = new Date(t.getFullYear(), t.getMonth(), 1); ce = t;
+      ps = new Date(cs.getFullYear() - 1, cs.getMonth(), cs.getDate());
+      pe = new Date(ce.getFullYear() - 1, ce.getMonth(), ce.getDate());
+    } else if (p === "last-90") {
+      ce = t; cs = new Date(t); cs.setDate(cs.getDate() - 89);
+      ps = new Date(cs); ps.setFullYear(ps.getFullYear() - 1);
+      pe = new Date(ce); pe.setFullYear(pe.getFullYear() - 1);
+    } else if (p === "last-12mo") {
+      ce = t; cs = new Date(t); cs.setFullYear(cs.getFullYear() - 1);
+      ps = new Date(cs); ps.setFullYear(ps.getFullYear() - 1);
+      pe = new Date(ce); pe.setFullYear(pe.getFullYear() - 1);
+    } else { return; } // custom: leave dates alone
+    setCurrStart(fmtDate(cs)); setCurrEnd(fmtDate(ce));
+    setPriorStart(fmtDate(ps)); setPriorEnd(fmtDate(pe));
+  }, []);
 
-  const yoy = s.prior_doc_referrals ? ((s.curr_doc_referrals - s.prior_doc_referrals) / s.prior_doc_referrals) * 100 : 0;
+  // Load date bounds once
+  useEffect(() => {
+    supabase.rpc("rpc_date_bounds").then(({ data, error }) => {
+      if (data && data.length > 0) {
+        setBounds({ min: data[0].min_date, max: data[0].max_date });
+      }
+    });
+  }, []);
+
+  // Load all data when dates change
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    const load = async () => {
+      const params = { curr_start: currStart, curr_end: currEnd, prior_start: priorStart, prior_end: priorEnd };
+      const trendRange = currStart < priorStart ? currStart : priorStart;
+      const trendEnd = currEnd > priorEnd ? currEnd : priorEnd;
+      try {
+        const [s, p, l, f, m] = await Promise.all([
+          supabase.rpc("rpc_summary", params),
+          supabase.rpc("rpc_physician_stats", params),
+          supabase.rpc("rpc_location_scorecard", params),
+          supabase.rpc("rpc_funnel", params),
+          supabase.rpc("rpc_monthly_trend", { range_start: trendRange, range_end: trendEnd }),
+        ]);
+        if (cancelled) return;
+        const firstError = s.error || p.error || l.error || f.error || m.error;
+        if (firstError) {
+          setError(firstError.message);
+          setLoading(false);
+          return;
+        }
+        setSummary(s.data?.[0] ?? null);
+        setPhysicians((p.data ?? []).sort((a: any, b: any) => b.evals_curr - a.evals_curr));
+        setLocations(l.data ?? []);
+        setFunnel(f.data ?? []);
+        setMonthly(m.data ?? []);
+        setLoading(false);
+      } catch (e: any) {
+        if (!cancelled) { setError(e.message || String(e)); setLoading(false); }
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [currStart, currEnd, priorStart, priorEnd]);
+
+  const curr = funnel.find((f) => f.period === "curr") || { created: 0, scheduled: 0, arrived: 0, evaluated: 0 };
+  const prior = funnel.find((f) => f.period === "prior") || { created: 0, scheduled: 0, arrived: 0, evaluated: 0 };
+  const s = summary || ({} as Partial<SummaryRow>);
+  const yoy = (s.prior_doc_referrals && s.curr_doc_referrals !== undefined)
+    ? ((s.curr_doc_referrals - s.prior_doc_referrals) / s.prior_doc_referrals) * 100 : 0;
   const convCurr = curr.created ? (curr.arrived / curr.created) * 100 : 0;
   const convPrior = prior.created ? (prior.arrived / prior.created) * 100 : 0;
 
-  // Derived lists
-  const goneDark = data.physicians.filter((r) => r.decline_flag === "GONE_DARK");
-  const sharpDecline = data.physicians.filter((r) => r.decline_flag === "SHARP_DECLINE" || r.decline_flag === "MODERATE_DECLINE");
-  const growth = data.physicians.filter((r) => r.growth_flag);
+  const goneDark = physicians.filter((r) => r.decline_flag === "GONE_DARK");
+  const sharpDecline = physicians.filter((r) => r.decline_flag === "SHARP_DECLINE" || r.decline_flag === "MODERATE_DECLINE");
+  const growth = physicians.filter((r) => r.growth_flag);
 
   const callSheet = useMemo(() => {
     const rows: any[] = [];
-    for (const r of data.physicians) {
+    for (const r of physicians) {
       if (r.departed) continue;
       let priority: string | null = null;
       let category = "";
@@ -111,35 +186,82 @@ export default function Dashboard({ data }: Props) {
     const order: Record<string, number> = { Critical: 0, High: 1, Medium: 2 };
     rows.sort((a, b) => (order[a.priority] ?? 9) - (order[b.priority] ?? 9) || b.evals_prior - a.evals_prior);
     return rows;
-  }, [data.physicians]);
+  }, [physicians]);
+
+  const tabs = ["Overview", "Locations", "Physicians", "Call Sheet", "Alerts"];
 
   return (
     <div className="min-h-screen p-4">
       <div className="max-w-7xl mx-auto">
-        <header className="bg-black rounded-t-lg px-6 py-4 flex justify-between items-center">
+        <header className="bg-black rounded-t-lg px-6 py-4 flex flex-wrap justify-between items-center gap-3">
           <div>
             <h1 className="text-white text-2xl font-bold">Tristar PT — Referral Intelligence</h1>
             <div className="text-gray-300 text-sm">
-              YTD {new Date().getFullYear()} · YoY vs same calendar window prior year · as of {s.as_of_date ?? "today"}
+              Current: {currStart} → {currEnd}  ·  Prior: {priorStart} → {priorEnd}
             </div>
           </div>
           <div className="text-right text-sm text-gray-300">
-            <div>{s.curr_doc_referrals?.toLocaleString() ?? 0} physician referrals</div>
+            <div>{(s.curr_doc_referrals ?? 0).toLocaleString()} physician referrals</div>
             <div>{s.curr_unique_physicians ?? 0} unique physicians</div>
-            <a href="/upload" className="inline-block mt-1 px-2 py-1 text-xs font-semibold rounded text-white" style={{backgroundColor: ORANGE}}>+ Upload report</a>
+            <a href="/upload" className="inline-block mt-1 px-2 py-1 text-xs font-semibold rounded text-white" style={{ backgroundColor: ORANGE }}>+ Upload report</a>
           </div>
         </header>
+
+        {/* Date range controls */}
+        <div className="bg-white border-x border-b px-6 py-3 flex flex-wrap items-center gap-2 text-sm">
+          <span className="font-semibold text-gray-700 mr-2">Range:</span>
+          {([
+            { id: "ytd", label: "YTD" },
+            { id: "this-month", label: "This month" },
+            { id: "last-90", label: "Last 90 days" },
+            { id: "last-12mo", label: "Last 12 mo" },
+            { id: "custom", label: "Custom" },
+          ] as { id: Preset; label: string }[]).map(p => (
+            <button key={p.id} onClick={() => applyPreset(p.id)}
+              className={"px-3 py-1 rounded text-xs " + (preset === p.id ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
+              style={preset === p.id ? { backgroundColor: ORANGE } : {}}>
+              {p.label}
+            </button>
+          ))}
+          <div className="flex items-center gap-1 ml-2">
+            <span className="text-xs text-gray-500">Curr:</span>
+            <input type="date" value={currStart} min={bounds?.min} max={bounds?.max}
+              onChange={e => { setPreset("custom"); setCurrStart(e.target.value); }}
+              className="border rounded px-2 py-1 text-xs" />
+            <span className="text-gray-400">→</span>
+            <input type="date" value={currEnd} min={bounds?.min} max={bounds?.max}
+              onChange={e => { setPreset("custom"); setCurrEnd(e.target.value); }}
+              className="border rounded px-2 py-1 text-xs" />
+          </div>
+          <div className="flex items-center gap-1 ml-2">
+            <span className="text-xs text-gray-500">Prior:</span>
+            <input type="date" value={priorStart} min={bounds?.min} max={bounds?.max}
+              onChange={e => { setPreset("custom"); setPriorStart(e.target.value); }}
+              className="border rounded px-2 py-1 text-xs" />
+            <span className="text-gray-400">→</span>
+            <input type="date" value={priorEnd} min={bounds?.min} max={bounds?.max}
+              onChange={e => { setPreset("custom"); setPriorEnd(e.target.value); }}
+              className="border rounded px-2 py-1 text-xs" />
+          </div>
+          {bounds && (
+            <span className="text-xs text-gray-400 ml-auto">Data: {bounds.min} → {bounds.max}</span>
+          )}
+        </div>
 
         <div className="bg-white rounded-b-lg shadow-lg">
           <div className="px-4 pt-3 flex gap-1 border-b overflow-x-auto">
             {tabs.map((t) => <Tab key={t} active={tab === t} onClick={() => setTab(t)}>{t}</Tab>)}
           </div>
+
           <div className="p-4">
-            {tab === "Overview" && (
+            {loading && <div className="text-center py-12 text-gray-500">Loading…</div>}
+            {error && <div className="bg-red-50 border border-red-200 rounded p-4 text-sm text-red-800">Error: {error}</div>}
+
+            {!loading && !error && tab === "Overview" && (
               <div className="space-y-6">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <Kpi label="Physician Referrals" value={s.curr_doc_referrals?.toLocaleString() ?? 0}
-                    sub={`${yoy >= 0 ? "+" : ""}${yoy.toFixed(1)}% YoY · Prior: ${s.prior_doc_referrals ?? 0}`} color={ORANGE} />
+                  <Kpi label="Physician Referrals" value={(s.curr_doc_referrals ?? 0).toLocaleString()}
+                    sub={`${yoy >= 0 ? "+" : ""}${yoy.toFixed(1)}% vs prior · ${s.prior_doc_referrals ?? 0}`} color={ORANGE} />
                   <Kpi label="Unique Physicians" value={s.curr_unique_physicians ?? 0}
                     sub={`vs ${s.prior_unique_physicians ?? 0} prior`} color={ORANGE} />
                   <Kpi label="Created → Arrived" value={`${convCurr.toFixed(1)}%`}
@@ -153,11 +275,10 @@ export default function Dashboard({ data }: Props) {
                   <Kpi label="🟠 Sharp Declines" value={s.sharp_decline_count ?? 0} sub=">50% drop" color="#EA580C" />
                   <Kpi label="🟡 Moderate Declines" value={s.moderate_decline_count ?? 0} sub="20-50% drop" color="#D97706" />
                 </div>
-
                 <div className="bg-white rounded-lg shadow p-4 border border-gray-200">
-                  <h3 className="font-bold mb-2" style={{ color: ORANGE }}>Monthly Referral Volume (18-mo)</h3>
+                  <h3 className="font-bold mb-2" style={{ color: ORANGE }}>Monthly Referral Volume (covers both periods)</h3>
                   <ResponsiveContainer width="100%" height={260}>
-                    <LineChart data={data.monthly}>
+                    <LineChart data={monthly}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
                       <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                       <YAxis tick={{ fontSize: 11 }} />
@@ -169,7 +290,7 @@ export default function Dashboard({ data }: Props) {
               </div>
             )}
 
-            {tab === "Locations" && (
+            {!loading && !error && tab === "Locations" && (
               <div className="space-y-6">
                 <div className="bg-white rounded-lg shadow overflow-hidden border border-gray-200">
                   <div className="px-4 py-3 font-bold text-white" style={{ backgroundColor: ORANGE }}>Location Scorecard</div>
@@ -178,8 +299,8 @@ export default function Dashboard({ data }: Props) {
                       <thead className="bg-gray-100">
                         <tr>
                           <th className="px-3 py-2 text-left">Location</th>
-                          <th className="px-3 py-2 text-right">YTD Curr</th>
-                          <th className="px-3 py-2 text-right">YTD Prior</th>
+                          <th className="px-3 py-2 text-right">Curr</th>
+                          <th className="px-3 py-2 text-right">Prior</th>
                           <th className="px-3 py-2 text-right">YoY</th>
                           <th className="px-3 py-2 text-right">Unique MDs</th>
                           <th className="px-3 py-2 text-left">Top Referrer</th>
@@ -189,7 +310,7 @@ export default function Dashboard({ data }: Props) {
                         </tr>
                       </thead>
                       <tbody>
-                        {data.locations.map((r, i) => (
+                        {locations.map((r, i) => (
                           <tr key={r.location} className={i % 2 === 0 ? "bg-white" : "bg-orange-50"}>
                             <td className="px-3 py-2 font-semibold">{r.short_name}</td>
                             <td className="px-3 py-2 text-right">{r.evals_curr}</td>
@@ -208,29 +329,26 @@ export default function Dashboard({ data }: Props) {
                     </table>
                   </div>
                 </div>
-
                 <div className="bg-white rounded-lg shadow p-4 border border-gray-200">
                   <h3 className="font-bold mb-3" style={{ color: ORANGE }}>Referral Volume by Location</h3>
                   <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={data.locations}>
+                    <BarChart data={locations}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="short_name" tick={{ fontSize: 11 }} />
                       <YAxis />
                       <Tooltip />
                       <Legend />
-                      <Bar dataKey="evals_curr" name="YTD Curr" fill={ORANGE} />
-                      <Bar dataKey="evals_prior" name="YTD Prior" fill={BLACK} />
+                      <Bar dataKey="evals_curr" name="Current" fill={ORANGE} />
+                      <Bar dataKey="evals_prior" name="Prior" fill={BLACK} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </div>
             )}
 
-            {tab === "Physicians" && <PhysiciansTab physicians={data.physicians} />}
-
-            {tab === "Call Sheet" && <CallSheetTab rows={callSheet} />}
-
-            {tab === "Alerts" && (
+            {!loading && !error && tab === "Physicians" && <PhysiciansTab physicians={physicians} />}
+            {!loading && !error && tab === "Call Sheet" && <CallSheetTab rows={callSheet} />}
+            {!loading && !error && tab === "Alerts" && (
               <div className="space-y-6">
                 <AlertTable title="🔴 Gone Dark (includes departed)" rows={goneDark} color="#CC0000" />
                 <AlertTable title="🟠 Sharp / 🟡 Moderate Decline" rows={sharpDecline} color="#EA580C" />
@@ -240,7 +358,7 @@ export default function Dashboard({ data }: Props) {
           </div>
         </div>
         <footer className="text-center text-xs text-gray-600 mt-3 pb-4">
-          Powered by Supabase · Data refreshed every 5 min · Caldwell + Grimaldi auto-excluded from actionable lists
+          Powered by Supabase + Vercel · Caldwell + Grimaldi auto-excluded from actionable lists
         </footer>
       </div>
     </div>
@@ -255,8 +373,7 @@ function PhysiciansTab({ physicians }: { physicians: PhysicianRow[] }) {
     r.npi.includes(filter) ||
     (r.dominant_payer ?? "").toLowerCase().includes(filter.toLowerCase()) ||
     (r.locations ?? "").toLowerCase().includes(filter.toLowerCase())
-  ).slice(0, 100);
-
+  ).slice(0, 200);
   return (
     <div>
       <input placeholder="Search physician, NPI, payer, location..." value={filter} onChange={e => setFilter(e.target.value)}
@@ -265,16 +382,10 @@ function PhysiciansTab({ physicians }: { physicians: PhysicianRow[] }) {
         <table className="w-full text-sm">
           <thead style={{ backgroundColor: ORANGE, color: "white" }}>
             <tr>
-              <th className="px-3 py-2 text-left">#</th>
-              <th className="px-3 py-2 text-left">Physician</th>
-              <th className="px-3 py-2 text-left">NPI</th>
-              <th className="px-3 py-2 text-right">Evals Curr</th>
-              <th className="px-3 py-2 text-right">Evals Prior</th>
-              <th className="px-3 py-2 text-right">YoY</th>
-              <th className="px-3 py-2 text-right">Visits</th>
-              <th className="px-3 py-2 text-right">Payer A %</th>
-              <th className="px-3 py-2 text-left">Top Payer</th>
-              <th className="px-3 py-2 text-left">Flag</th>
+              <th className="px-3 py-2 text-left">#</th><th className="px-3 py-2 text-left">Physician</th><th className="px-3 py-2 text-left">NPI</th>
+              <th className="px-3 py-2 text-right">Curr</th><th className="px-3 py-2 text-right">Prior</th><th className="px-3 py-2 text-right">YoY</th>
+              <th className="px-3 py-2 text-right">Visits</th><th className="px-3 py-2 text-right">Payer A %</th>
+              <th className="px-3 py-2 text-left">Top Payer</th><th className="px-3 py-2 text-left">Flag</th>
             </tr>
           </thead>
           <tbody>
@@ -321,13 +432,9 @@ function CallSheetTab({ rows }: { rows: any[] }) {
         <table className="w-full text-sm">
           <thead style={{ backgroundColor: ORANGE, color: "white" }}>
             <tr>
-              <th className="px-2 py-2 text-left">Priority</th>
-              <th className="px-2 py-2 text-left">Category</th>
-              <th className="px-2 py-2 text-left">Physician</th>
-              <th className="px-2 py-2 text-left">NPI</th>
-              <th className="px-2 py-2 text-right">Prior</th>
-              <th className="px-2 py-2 text-right">Curr</th>
-              <th className="px-2 py-2 text-left">Action</th>
+              <th className="px-2 py-2 text-left">Priority</th><th className="px-2 py-2 text-left">Category</th>
+              <th className="px-2 py-2 text-left">Physician</th><th className="px-2 py-2 text-left">NPI</th>
+              <th className="px-2 py-2 text-right">Prior</th><th className="px-2 py-2 text-right">Curr</th><th className="px-2 py-2 text-left">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -357,12 +464,9 @@ function AlertTable({ title, rows, color }: { title: string; rows: PhysicianRow[
         <table className="w-full text-sm">
           <thead className="bg-gray-100 sticky top-0">
             <tr>
-              <th className="px-3 py-2 text-left">Physician</th>
-              <th className="px-3 py-2 text-left">NPI</th>
-              <th className="px-3 py-2 text-right">Prior</th>
-              <th className="px-3 py-2 text-right">Curr</th>
-              <th className="px-3 py-2 text-left">Flag</th>
-              <th className="px-3 py-2 text-left">Status</th>
+              <th className="px-3 py-2 text-left">Physician</th><th className="px-3 py-2 text-left">NPI</th>
+              <th className="px-3 py-2 text-right">Prior</th><th className="px-3 py-2 text-right">Curr</th>
+              <th className="px-3 py-2 text-left">Flag</th><th className="px-3 py-2 text-left">Status</th>
             </tr>
           </thead>
           <tbody>
