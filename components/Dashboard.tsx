@@ -1,7 +1,10 @@
 "use client";
 import { useState, useMemo, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { FiltersPanel, FilterState, FilterOption } from "./FiltersPanel";
+import { SavedViews } from "./SavedViews";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -46,7 +49,6 @@ type SummaryRow = {
   curr_start: string; curr_end: string; prior_start: string; prior_end: string;
 };
 
-type SourceRow = { source: string; total_cases: number };
 
 const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
 const today = () => new Date();
@@ -110,10 +112,17 @@ export default function Dashboard() {
   const [priorEnd, setPriorEnd] = useState<string>(fmtDate(minusOneYear(today())));
   const [bounds, setBounds] = useState<{ min: string; max: string } | null>(null);
 
-  // Source filter state
-  const [sources, setSources] = useState<SourceRow[]>([]);
-  const [selectedSources, setSelectedSources] = useState<string[]>(["Doctors Office"]); // default to physicians
-  const [sourcesMenuOpen, setSourcesMenuOpen] = useState(false);
+  // All filters (multi-select across all dimensions)
+  const [filters, setFilters] = useState<FilterState>({
+    sources: ["Doctors Office"], payers: [], clinics: [], specialties: [],
+    therapists: [], npis: [], diagnoses: [], statuses: [],
+  });
+  const [filterOptions, setFilterOptions] = useState<FilterOption[]>([]);
+
+  // URL state sync
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [urlInitialized, setUrlInitialized] = useState(false);
 
   // Data state
   const [tab, setTab] = useState<string>("Overview");
@@ -178,36 +187,101 @@ export default function Dashboard() {
     if (preset !== "custom") applyPreset(preset, mode);
   }, [preset, applyPreset]);
 
-  // Load date bounds + available sources once
+  // Load date bounds + all filter options once
   useEffect(() => {
     supabase.rpc("rpc_date_bounds").then(({ data }) => {
       if (data && data.length > 0) {
         setBounds({ min: data[0].min_date, max: data[0].max_date });
       }
     });
-    supabase.rpc("rpc_referral_sources").then(({ data }) => {
-      if (data) setSources(data);
+    supabase.rpc("rpc_filter_options").then(({ data }) => {
+      if (data) setFilterOptions(data);
     });
   }, []);
 
-  // Load all data when dates or sources change
+  // Hydrate state from URL on mount (one-time)
+  useEffect(() => {
+    if (urlInitialized) return;
+    const getArr = (k: string): string[] => {
+      const v = searchParams.get(k);
+      return v ? v.split("|").filter(Boolean) : [];
+    };
+    const getStr = (k: string, def: string) => searchParams.get(k) ?? def;
+    const cs = searchParams.get("cs"); const ce = searchParams.get("ce");
+    const ps = searchParams.get("ps"); const pe = searchParams.get("pe");
+    if (cs) setCurrStart(cs);
+    if (ce) setCurrEnd(ce);
+    if (ps) setPriorStart(ps);
+    if (pe) setPriorEnd(pe);
+    if (cs || ce || ps || pe) setPreset("custom");
+    setCompare(getStr("cm", "yoy") as CompareMode);
+    // Only overwrite filters if any filter param present
+    const keys = ["src", "pay", "cln", "spc", "thr", "npi", "dx", "stat"];
+    if (keys.some(k => searchParams.get(k) !== null)) {
+      setFilters({
+        sources: getArr("src"),
+        payers: getArr("pay"),
+        clinics: getArr("cln"),
+        specialties: getArr("spc"),
+        therapists: getArr("thr"),
+        npis: getArr("npi"),
+        diagnoses: getArr("dx"),
+        statuses: getArr("stat"),
+      });
+    }
+    setUrlInitialized(true);
+  }, [searchParams, urlInitialized]);
+
+  // Sync state → URL (debounced, skip first render)
+  useEffect(() => {
+    if (!urlInitialized) return;
+    const qs = new URLSearchParams();
+    qs.set("cs", currStart); qs.set("ce", currEnd);
+    qs.set("ps", priorStart); qs.set("pe", priorEnd);
+    if (compare !== "yoy") qs.set("cm", compare);
+    const f: [string, string[]][] = [
+      ["src", filters.sources], ["pay", filters.payers], ["cln", filters.clinics],
+      ["spc", filters.specialties], ["thr", filters.therapists], ["npi", filters.npis],
+      ["dx", filters.diagnoses], ["stat", filters.statuses],
+    ];
+    for (const [k, v] of f) if (v.length > 0) qs.set(k, v.join("|"));
+    const next = "?" + qs.toString();
+    if (next !== window.location.search) {
+      router.replace(next, { scroll: false });
+    }
+  }, [urlInitialized, currStart, currEnd, priorStart, priorEnd, compare, filters, router]);
+
+  // Load all data when dates or filters change
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     const load = async () => {
-      // null = all sources; empty array also means all
-      const filter = selectedSources.length === 0 ? null : selectedSources;
-      const params: any = { curr_start: currStart, curr_end: currEnd, prior_start: priorStart, prior_end: priorEnd, source_filter: filter };
+      const nullIfEmpty = (a: string[]) => (a.length === 0 ? null : a);
+      const commonFilters = {
+        source_filter: nullIfEmpty(filters.sources),
+        payer_filter: nullIfEmpty(filters.payers),
+        clinic_filter: nullIfEmpty(filters.clinics),
+        specialty_filter: nullIfEmpty(filters.specialties),
+        therapist_filter: nullIfEmpty(filters.therapists),
+        npi_filter: nullIfEmpty(filters.npis),
+        dx_filter: nullIfEmpty(filters.diagnoses),
+        status_filter: nullIfEmpty(filters.statuses),
+      };
+      const params: any = {
+        curr_start: currStart, curr_end: currEnd,
+        prior_start: priorStart, prior_end: priorEnd,
+        ...commonFilters,
+      };
       const trendRange = currStart < priorStart ? currStart : priorStart;
       const trendEnd = currEnd > priorEnd ? currEnd : priorEnd;
       try {
         const [s, p, l, f, m] = await Promise.all([
-          supabase.rpc("rpc_summary_v2", params),
-          supabase.rpc("rpc_physician_stats_v2", params),
-          supabase.rpc("rpc_location_scorecard_v2", params),
-          supabase.rpc("rpc_funnel_v2", params),
-          supabase.rpc("rpc_monthly_trend_v2", { range_start: trendRange, range_end: trendEnd, source_filter: filter }),
+          supabase.rpc("rpc_summary_v3", params),
+          supabase.rpc("rpc_physician_stats_v3", params),
+          supabase.rpc("rpc_location_scorecard_v3", params),
+          supabase.rpc("rpc_funnel_v3", params),
+          supabase.rpc("rpc_monthly_trend_v3", { range_start: trendRange, range_end: trendEnd, ...commonFilters }),
         ]);
         if (cancelled) return;
         const firstError = s.error || p.error || l.error || f.error || m.error;
@@ -228,19 +302,7 @@ export default function Dashboard() {
     };
     load();
     return () => { cancelled = true; };
-  }, [currStart, currEnd, priorStart, priorEnd, selectedSources]);
-
-  // Helpers for source filter UI
-  const toggleSource = (src: string) => {
-    setSelectedSources(prev => prev.includes(src) ? prev.filter(s => s !== src) : [...prev, src]);
-  };
-  const selectAllSources = () => setSelectedSources([]);
-  const selectOnlyDoctors = () => setSelectedSources(["Doctors Office"]);
-  const sourcesLabel = selectedSources.length === 0
-    ? "All sources"
-    : selectedSources.length === 1
-      ? selectedSources[0]
-      : `${selectedSources.length} sources`;
+  }, [currStart, currEnd, priorStart, priorEnd, filters]);
 
   const curr = funnel.find((f) => f.period === "curr") || { created: 0, scheduled: 0, arrived: 0, evaluated: 0 };
   const prior = funnel.find((f) => f.period === "prior") || { created: 0, scheduled: 0, arrived: 0, evaluated: 0 };
@@ -296,7 +358,11 @@ export default function Dashboard() {
           <div className="text-right text-sm text-gray-300">
             <div>{(s.curr_doc_referrals ?? 0).toLocaleString()} physician referrals</div>
             <div>{s.curr_unique_physicians ?? 0} unique physicians</div>
-            <div className="flex gap-1 mt-1 justify-end">
+            <div className="flex gap-1 mt-1 justify-end items-center">
+              <SavedViews
+                currentSearch={typeof window !== "undefined" ? window.location.search : ""}
+                onLoad={(search) => router.replace("/" + search, { scroll: false })}
+              />
               <Link href="/discharges" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Outcome queue</Link>
               <Link href="/upload" className="px-2 py-1 text-xs font-semibold rounded text-white" style={{ backgroundColor: ORANGE }}>+ Upload</Link>
             </div>
@@ -387,41 +453,8 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Referral source filter */}
-        <div className="bg-white border-x border-b px-6 py-3 flex flex-wrap items-center gap-2 text-sm relative">
-          <span className="font-semibold text-gray-700 mr-2">Sources:</span>
-          <button onClick={selectAllSources}
-            className={"px-3 py-1 rounded text-xs " + (selectedSources.length === 0 ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
-            style={selectedSources.length === 0 ? { backgroundColor: ORANGE } : {}}>
-            All sources
-          </button>
-          <button onClick={selectOnlyDoctors}
-            className={"px-3 py-1 rounded text-xs " + (selectedSources.length === 1 && selectedSources[0] === "Doctors Office" ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
-            style={selectedSources.length === 1 && selectedSources[0] === "Doctors Office" ? { backgroundColor: ORANGE } : {}}>
-            Doctors Office only
-          </button>
-          <button onClick={() => setSourcesMenuOpen(o => !o)}
-            className="px-3 py-1 rounded text-xs bg-gray-100 hover:bg-gray-200">
-            Custom: {sourcesLabel} {sourcesMenuOpen ? "▲" : "▼"}
-          </button>
-          {sourcesMenuOpen && (
-            <div className="absolute top-full left-6 mt-1 z-10 bg-white border rounded shadow-lg p-3 max-h-80 overflow-auto min-w-[280px]">
-              <div className="text-xs font-semibold text-gray-500 mb-2">Toggle sources to include</div>
-              {sources.map(s => (
-                <label key={s.source} className="flex items-center gap-2 py-1 hover:bg-gray-50 px-2 rounded cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={selectedSources.includes(s.source)}
-                    onChange={() => toggleSource(s.source)}
-                  />
-                  <span className="text-sm flex-1">{s.source}</span>
-                  <span className="text-xs text-gray-500">{s.total_cases.toLocaleString()}</span>
-                </label>
-              ))}
-              <button onClick={() => setSourcesMenuOpen(false)} className="mt-2 text-xs text-gray-500 hover:text-gray-700">Close</button>
-            </div>
-          )}
-        </div>
+        {/* All filters (multi-select across 7 dimensions) */}
+        <FiltersPanel filters={filters} options={filterOptions} onChange={setFilters} />
 
         <div className="bg-white rounded-b-lg shadow-lg">
           <div className="px-4 pt-3 flex gap-1 border-b overflow-x-auto">
