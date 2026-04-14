@@ -51,10 +51,38 @@ type SourceRow = { source: string; total_cases: number };
 const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
 const today = () => new Date();
 const startOfYear = (d: Date) => new Date(d.getFullYear(), 0, 1);
+const endOfYear = (d: Date) => new Date(d.getFullYear(), 11, 31);
+const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
+const endOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 0);
+const startOfQuarter = (d: Date) => {
+  const q = Math.floor(d.getMonth() / 3);
+  return new Date(d.getFullYear(), q * 3, 1);
+};
+const endOfQuarter = (d: Date) => {
+  const q = Math.floor(d.getMonth() / 3);
+  return new Date(d.getFullYear(), q * 3 + 3, 0);
+};
+const startOfWeek = (d: Date) => {
+  // Monday-start week
+  const day = (d.getDay() + 6) % 7;
+  const s = new Date(d); s.setDate(s.getDate() - day); s.setHours(0, 0, 0, 0); return s;
+};
+const addDays = (d: Date, n: number) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
+const addMonths = (d: Date, n: number) => { const r = new Date(d); r.setMonth(r.getMonth() + n); return r; };
+const addYears = (d: Date, n: number) => { const r = new Date(d); r.setFullYear(r.getFullYear() + n); return r; };
+const daysBetween = (a: Date, b: Date) => Math.round((b.getTime() - a.getTime()) / 86400000);
 const minusOneYear = (d: Date) => new Date(d.getFullYear() - 1, d.getMonth(), d.getDate());
 const isoDate = (s: string) => new Date(s + "T00:00:00");
 
-type Preset = "ytd" | "this-month" | "last-90" | "last-12mo" | "custom";
+type Preset =
+  | "ytd" | "last-year"
+  | "this-quarter" | "last-quarter"
+  | "this-month" | "last-month"
+  | "this-week" | "last-week"
+  | "last-7" | "last-30" | "last-60" | "last-90" | "last-180" | "last-12mo"
+  | "custom";
+
+type CompareMode = "yoy" | "sequential";
 
 const Kpi = ({ label, value, sub, color }: any) => (
   <div className="bg-white rounded-lg shadow p-4 border-l-4" style={{ borderColor: color || ORANGE }}>
@@ -75,6 +103,7 @@ const Tab = ({ active, onClick, children }: any) => (
 export default function Dashboard() {
   // Date range state
   const [preset, setPreset] = useState<Preset>("ytd");
+  const [compare, setCompare] = useState<CompareMode>("yoy");
   const [currStart, setCurrStart] = useState<string>(fmtDate(startOfYear(today())));
   const [currEnd, setCurrEnd] = useState<string>(fmtDate(today()));
   const [priorStart, setPriorStart] = useState<string>(fmtDate(minusOneYear(startOfYear(today()))));
@@ -96,30 +125,58 @@ export default function Dashboard() {
   const [monthly, setMonthly] = useState<{ month: string; evals: number }[]>([]);
   const [funnel, setFunnel] = useState<{ period: string; created: number; scheduled: number; arrived: number; evaluated: number }[]>([]);
 
-  // Apply preset
-  const applyPreset = useCallback((p: Preset) => {
+  // Apply preset — computes current window. Prior window derives from `compare`.
+  const applyPreset = useCallback((p: Preset, mode: CompareMode = compare) => {
     setPreset(p);
     const t = today();
-    let cs: Date, ce: Date, ps: Date, pe: Date;
-    if (p === "ytd") {
-      cs = startOfYear(t); ce = t;
-      ps = minusOneYear(cs); pe = minusOneYear(ce);
-    } else if (p === "this-month") {
-      cs = new Date(t.getFullYear(), t.getMonth(), 1); ce = t;
-      ps = new Date(cs.getFullYear() - 1, cs.getMonth(), cs.getDate());
-      pe = new Date(ce.getFullYear() - 1, ce.getMonth(), ce.getDate());
-    } else if (p === "last-90") {
-      ce = t; cs = new Date(t); cs.setDate(cs.getDate() - 89);
-      ps = new Date(cs); ps.setFullYear(ps.getFullYear() - 1);
-      pe = new Date(ce); pe.setFullYear(pe.getFullYear() - 1);
-    } else if (p === "last-12mo") {
-      ce = t; cs = new Date(t); cs.setFullYear(cs.getFullYear() - 1);
-      ps = new Date(cs); ps.setFullYear(ps.getFullYear() - 1);
-      pe = new Date(ce); pe.setFullYear(pe.getFullYear() - 1);
-    } else { return; } // custom: leave dates alone
+    let cs: Date, ce: Date;
+
+    switch (p) {
+      case "ytd": cs = startOfYear(t); ce = t; break;
+      case "last-year": cs = startOfYear(addYears(t, -1)); ce = endOfYear(addYears(t, -1)); break;
+      case "this-quarter": cs = startOfQuarter(t); ce = t; break;
+      case "last-quarter": {
+        const lq = addMonths(startOfQuarter(t), -3);
+        cs = startOfQuarter(lq); ce = endOfQuarter(lq); break;
+      }
+      case "this-month": cs = startOfMonth(t); ce = t; break;
+      case "last-month": {
+        const lm = addMonths(startOfMonth(t), -1);
+        cs = startOfMonth(lm); ce = endOfMonth(lm); break;
+      }
+      case "this-week": cs = startOfWeek(t); ce = t; break;
+      case "last-week": {
+        const lw = addDays(startOfWeek(t), -7);
+        cs = lw; ce = addDays(lw, 6); break;
+      }
+      case "last-7": ce = t; cs = addDays(t, -6); break;
+      case "last-30": ce = t; cs = addDays(t, -29); break;
+      case "last-60": ce = t; cs = addDays(t, -59); break;
+      case "last-90": ce = t; cs = addDays(t, -89); break;
+      case "last-180": ce = t; cs = addDays(t, -179); break;
+      case "last-12mo": ce = t; cs = addYears(t, -1); break;
+      default: return; // custom: leave alone
+    }
+
+    // Prior window
+    let ps: Date, pe: Date;
+    if (mode === "yoy") {
+      ps = addYears(cs, -1); pe = addYears(ce, -1);
+    } else {
+      // Sequential — window of same length immediately preceding
+      const len = daysBetween(cs, ce); // inclusive days-1
+      pe = addDays(cs, -1);
+      ps = addDays(pe, -len);
+    }
     setCurrStart(fmtDate(cs)); setCurrEnd(fmtDate(ce));
     setPriorStart(fmtDate(ps)); setPriorEnd(fmtDate(pe));
-  }, []);
+  }, [compare]);
+
+  // When user toggles comparison mode, recompute prior window based on current preset
+  const applyCompare = useCallback((mode: CompareMode) => {
+    setCompare(mode);
+    if (preset !== "custom") applyPreset(preset, mode);
+  }, [preset, applyPreset]);
 
   // Load date bounds + available sources once
   useEffect(() => {
@@ -246,24 +303,52 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* Date range controls */}
+        {/* Date range controls — row 1: presets */}
         <div className="bg-white border-x border-b px-6 py-3 flex flex-wrap items-center gap-2 text-sm">
           <span className="font-semibold text-gray-700 mr-2">Range:</span>
           {([
-            { id: "ytd", label: "YTD" },
+            { id: "this-week", label: "This week" },
+            { id: "last-week", label: "Last week" },
             { id: "this-month", label: "This month" },
-            { id: "last-90", label: "Last 90 days" },
-            { id: "last-12mo", label: "Last 12 mo" },
-            { id: "custom", label: "Custom" },
+            { id: "last-month", label: "Last month" },
+            { id: "this-quarter", label: "This qtr" },
+            { id: "last-quarter", label: "Last qtr" },
+            { id: "ytd", label: "YTD" },
+            { id: "last-year", label: "Last year" },
           ] as { id: Preset; label: string }[]).map(p => (
             <button key={p.id} onClick={() => applyPreset(p.id)}
-              className={"px-3 py-1 rounded text-xs " + (preset === p.id ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
+              className={"px-2 py-1 rounded text-xs " + (preset === p.id ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
               style={preset === p.id ? { backgroundColor: ORANGE } : {}}>
               {p.label}
             </button>
           ))}
-          <div className="flex items-center gap-1 ml-2">
-            <span className="text-xs text-gray-500">Curr:</span>
+          <span className="text-gray-300 mx-1">|</span>
+          {([
+            { id: "last-7", label: "7d" },
+            { id: "last-30", label: "30d" },
+            { id: "last-60", label: "60d" },
+            { id: "last-90", label: "90d" },
+            { id: "last-180", label: "180d" },
+            { id: "last-12mo", label: "12mo" },
+          ] as { id: Preset; label: string }[]).map(p => (
+            <button key={p.id} onClick={() => applyPreset(p.id)}
+              className={"px-2 py-1 rounded text-xs " + (preset === p.id ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
+              style={preset === p.id ? { backgroundColor: ORANGE } : {}}>
+              {p.label}
+            </button>
+          ))}
+          <span className="text-gray-300 mx-1">|</span>
+          <button onClick={() => applyPreset("custom")}
+            className={"px-2 py-1 rounded text-xs " + (preset === "custom" ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
+            style={preset === "custom" ? { backgroundColor: ORANGE } : {}}>
+            Custom
+          </button>
+        </div>
+
+        {/* Date range controls — row 2: dates + compare mode */}
+        <div className="bg-white border-x border-b px-6 py-3 flex flex-wrap items-center gap-2 text-sm">
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-gray-500">Current:</span>
             <input type="date" value={currStart} min={bounds?.min} max={bounds?.max}
               onChange={e => { setPreset("custom"); setCurrStart(e.target.value); }}
               className="border rounded px-2 py-1 text-xs" />
@@ -272,7 +357,7 @@ export default function Dashboard() {
               onChange={e => { setPreset("custom"); setCurrEnd(e.target.value); }}
               className="border rounded px-2 py-1 text-xs" />
           </div>
-          <div className="flex items-center gap-1 ml-2">
+          <div className="flex items-center gap-1 ml-3">
             <span className="text-xs text-gray-500">Prior:</span>
             <input type="date" value={priorStart} min={bounds?.min} max={bounds?.max}
               onChange={e => { setPreset("custom"); setPriorStart(e.target.value); }}
@@ -282,8 +367,23 @@ export default function Dashboard() {
               onChange={e => { setPreset("custom"); setPriorEnd(e.target.value); }}
               className="border rounded px-2 py-1 text-xs" />
           </div>
+          <div className="flex items-center gap-1 ml-3">
+            <span className="text-xs text-gray-500">Compare:</span>
+            <button onClick={() => applyCompare("yoy")}
+              className={"px-2 py-1 rounded text-xs " + (compare === "yoy" ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
+              style={compare === "yoy" ? { backgroundColor: ORANGE } : {}}
+              title="Prior = same window last year (seasonality-aware)">
+              YoY
+            </button>
+            <button onClick={() => applyCompare("sequential")}
+              className={"px-2 py-1 rounded text-xs " + (compare === "sequential" ? "text-white" : "bg-gray-100 hover:bg-gray-200")}
+              style={compare === "sequential" ? { backgroundColor: ORANGE } : {}}
+              title="Prior = equal-length window immediately before current">
+              Sequential
+            </button>
+          </div>
           {bounds && (
-            <span className="text-xs text-gray-400 ml-auto">Data: {bounds.min} → {bounds.max}</span>
+            <span className="text-xs text-gray-400 ml-auto">Data available: {bounds.min} → {bounds.max}</span>
           )}
         </div>
 
