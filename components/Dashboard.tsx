@@ -126,6 +126,7 @@ export default function Dashboard({ data }: Props) {
           <div className="text-right text-sm text-gray-300">
             <div>{s.curr_doc_referrals?.toLocaleString() ?? 0} physician referrals</div>
             <div>{s.curr_unique_physicians ?? 0} unique physicians</div>
+            <a href="/upload" className="inline-block mt-1 px-2 py-1 text-xs font-semibold rounded text-white" style={{backgroundColor: ORANGE}}>+ Upload report</a>
           </div>
         </header>
 
