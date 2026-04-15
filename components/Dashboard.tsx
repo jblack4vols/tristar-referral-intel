@@ -369,6 +369,7 @@ export default function Dashboard() {
                 currentSearch={typeof window !== "undefined" ? window.location.search : ""}
                 onLoad={(search) => router.replace("/" + search, { scroll: false })}
               />
+              <Link href="/revenue" className="px-2 py-1 text-xs font-semibold rounded bg-green-100 text-green-900">💰 Revenue</Link>
               <Link href="/weekly" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">📄 Weekly</Link>
               <Link href="/discharges" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Outcomes</Link>
               <Link href="/zero-visits" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Zero-visit</Link>

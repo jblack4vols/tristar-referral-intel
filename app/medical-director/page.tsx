@@ -61,6 +61,8 @@ function MedicalDirectorPageInner() {
   const [compareMode, setCompareMode] = useState<CompareMode>("yoy");
   const [rpv, setRpv] = useState(95);
   const [cpv, setCpv] = useState(92);
+  const [useActualRpv, setUseActualRpv] = useState(false);
+  const [actualRpvInfo, setActualRpvInfo] = useState<{ rpv: number; cases: number; coverage: number } | null>(null);
   const [roi, setRoi] = useState<RoiResult | null>(null);
   const [priorRoi, setPriorRoi] = useState<RoiResult | null>(null);
   const [roiLoading, setRoiLoading] = useState(false);
@@ -101,6 +103,28 @@ function MedicalDirectorPageInner() {
     const priorStart = addDays(priorEnd, -len);
     return { start: priorStart, end: priorEnd };
   };
+
+  // If useActualRpv toggled on, fetch blended RPV for this contract's NPI set
+  useEffect(() => {
+    if (!useActualRpv || !activeId) { setActualRpvInfo(null); return; }
+    const contract = contracts.find(c => c.id === activeId);
+    if (!contract) return;
+    const npis = [...(contract.affiliated_npis ?? []), contract.physician_npi];
+    supabase.rpc("rpc_blended_rpv_for_npis", {
+      npi_list: npis,
+      location_list: contract.locations_covered?.length ? contract.locations_covered : null,
+      range_start: rangeStart, range_end: rangeEnd,
+    }).then(({ data }) => {
+      if (data && data.length > 0 && data[0].blended_rpv != null) {
+        setActualRpvInfo({
+          rpv: Number(data[0].blended_rpv),
+          cases: Number(data[0].total_cases_considered),
+          coverage: 100 - Number(data[0].unmatched_payer_pct || 0),
+        });
+        setRpv(Number(data[0].blended_rpv));
+      }
+    });
+  }, [useActualRpv, activeId, rangeStart, rangeEnd, contracts]);
 
   useEffect(() => {
     if (!activeId) { setRoi(null); setPriorRoi(null); return; }
@@ -289,10 +313,19 @@ function MedicalDirectorPageInner() {
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">Revenue per visit ($) — editable</label>
                     <div className="flex items-center gap-2">
-                      <input type="number" step="0.01" value={rpv} onChange={e => setRpv(parseFloat(e.target.value) || 0)}
+                      <input type="number" step="0.01" value={rpv} onChange={e => { setUseActualRpv(false); setRpv(parseFloat(e.target.value) || 0); }}
                         className="border-2 border-orange-300 rounded px-3 py-1.5 text-lg font-bold w-32 focus:outline-none focus:border-orange-500" />
-                      <span className="text-xs text-gray-500">default: $95 · blended avg across payers</span>
+                      <label className="flex items-center gap-1 text-xs cursor-pointer select-none">
+                        <input type="checkbox" checked={useActualRpv} onChange={e => setUseActualRpv(e.target.checked)} />
+                        <span className="font-semibold">Use actual RPV from payer mix</span>
+                      </label>
                     </div>
+                    {useActualRpv && actualRpvInfo && (
+                      <div className="text-xs text-green-700 mt-1">
+                        ✓ Blended RPV from this contract's actual payer mix: <strong>{fmtCurrency(actualRpvInfo.rpv, 2)}</strong>
+                        {" "}({actualRpvInfo.cases} cases · {actualRpvInfo.coverage.toFixed(0)}% payer coverage)
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">Cost per visit ($) — editable</label>
