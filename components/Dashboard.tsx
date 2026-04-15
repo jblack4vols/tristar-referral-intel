@@ -370,11 +370,17 @@ export default function Dashboard() {
                 onLoad={(search) => router.replace("/" + search, { scroll: false })}
               />
               <Link href="/revenue" className="px-2 py-1 text-xs font-semibold rounded bg-green-100 text-green-900">💰 Revenue</Link>
+              <Link href="/payer-contracts" className="px-2 py-1 text-xs font-semibold rounded bg-green-100 text-green-900">Contracts</Link>
+              <Link href="/ar-aging" className="px-2 py-1 text-xs font-semibold rounded bg-red-100 text-red-900">AR aging</Link>
+              <Link href="/goals" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">🎯 Goals</Link>
+              <Link href="/therapists" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Therapists</Link>
               <Link href="/weekly" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">📄 Weekly</Link>
               <Link href="/discharges" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Outcomes</Link>
               <Link href="/zero-visits" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Zero-visit</Link>
               <Link href="/workers-comp" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">WC</Link>
               <Link href="/medical-director" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">Med Director</Link>
+              <Link href="/data-quality" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">DQ</Link>
+              <Link href="/m" className="px-2 py-1 text-xs font-semibold rounded bg-white text-black">📱 Mobile</Link>
               <Link href="/upload" className="px-2 py-1 text-xs font-semibold rounded text-white" style={{ backgroundColor: ORANGE }}>+ Upload</Link>
             </div>
           </div>

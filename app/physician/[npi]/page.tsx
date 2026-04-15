@@ -93,8 +93,9 @@ function PhysicianDetail({ npi }: { npi: string }) {
   return (
     <div className="min-h-screen p-4">
       <div className="max-w-7xl mx-auto">
-        <div className="mb-3">
+        <div className="mb-3 flex justify-between items-center">
           <Link href={`/${preserveSearch}`} className="text-sm hover:underline" style={{ color: ORANGE }}>← Back to dashboard</Link>
+          <Link href={`/scorecard/${npi}`} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">🖨 Printable scorecard</Link>
         </div>
 
         <header className="bg-black rounded-t-lg px-6 py-4">
