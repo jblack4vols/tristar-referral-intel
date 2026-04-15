@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { useUrlFilters, nullIfEmpty } from "@/lib/useUrlFilters";
 import { FiltersPanel, FilterOption } from "@/components/FiltersPanel";
 import { PhysicianNotes, PhysicianActivities } from "@/components/PhysicianExtras";
-import { downloadCsv } from "@/lib/export";
+import { downloadCsv, fmtCurrency, fmtCurrencyCompact } from "@/lib/export";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -23,6 +23,9 @@ function PhysicianDetail({ npi }: { npi: string }) {
   const [byDx, setByDx] = useState<any[]>([]);
   const [discharge, setDischarge] = useState<any[]>([]);
   const [recentCases, setRecentCases] = useState<any[]>([]);
+  const [revenue, setRevenue] = useState<any>(null);
+  const [revenueMonthly, setRevenueMonthly] = useState<any[]>([]);
+  const [revenueByPayer, setRevenueByPayer] = useState<any[]>([]);
   const [filterOptions, setFilterOptions] = useState<FilterOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +53,7 @@ function PhysicianDetail({ npi }: { npi: string }) {
     setLoading(true);
     (async () => {
       try {
-        const [o, t, bc, bt, bp, bd, dr, rc] = await Promise.all([
+        const [o, t, bc, bt, bp, bd, dr, rc, rev, revM, revP] = await Promise.all([
           supabase.rpc("rpc_physician_overview", { p_npi: npi }),
           supabase.rpc("rpc_physician_monthly_trend", { p_npi: npi, ...filterPayload }),
           supabase.rpc("rpc_physician_by_clinic", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd, ...filterPayload }),
@@ -59,6 +62,9 @@ function PhysicianDetail({ npi }: { npi: string }) {
           supabase.rpc("rpc_physician_by_dx", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd, ...filterPayload }),
           supabase.rpc("rpc_physician_discharge_reasons", { p_npi: npi, ...filterPayload }),
           supabase.rpc("rpc_physician_recent_cases", { p_npi: npi, row_limit: 50, ...filterPayload }),
+          supabase.rpc("rpc_physician_revenue", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd }),
+          supabase.rpc("rpc_physician_revenue_monthly", { p_npi: npi }),
+          supabase.rpc("rpc_physician_revenue_by_payer", { p_npi: npi, range_start: rangeStart, range_end: rangeEnd }),
         ]);
         if (cancelled) return;
         const firstErr = o.error || t.error || bc.error || bt.error || bp.error || bd.error || dr.error || rc.error;
@@ -71,6 +77,9 @@ function PhysicianDetail({ npi }: { npi: string }) {
         setByDx(bd.data ?? []);
         setDischarge(dr.data ?? []);
         setRecentCases(rc.data ?? []);
+        setRevenue(rev.data?.[0] ?? null);
+        setRevenueMonthly(revM.data ?? []);
+        setRevenueByPayer(revP.data ?? []);
         setLoading(false);
       } catch (e: any) {
         if (!cancelled) { setError(e.message); setLoading(false); }
@@ -143,6 +152,51 @@ function PhysicianDetail({ npi }: { npi: string }) {
                 </LineChart>
               </ResponsiveContainer>
             </div>
+
+            {revenue && revenue.total_visits > 0 && (
+              <div className="border-2 border-green-300 rounded p-3 bg-green-50">
+                <h3 className="font-bold mb-2" style={{ color: "#16A34A" }}>💰 Actual revenue (from Revenue Report · in date range)</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <Stat label="Visits" value={Number(revenue.total_visits).toLocaleString()} color="#16A34A" />
+                  <Stat label="Total paid" value={fmtCurrency(Number(revenue.total_paid))} color="#16A34A" />
+                  <Stat label="Actual RPV" value={fmtCurrency(Number(revenue.rpv), 2)} color="#16A34A" />
+                  <Stat label="Unique patients" value={Number(revenue.unique_patients).toLocaleString()} color="#16A34A" />
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-2">
+                  <Stat label="Total billed" value={fmtCurrency(Number(revenue.total_billed))} />
+                  <Stat label="Collections ratio" value={`${(Number(revenue.collections_ratio) * 100).toFixed(1)}%`} />
+                  <Stat label="Avg days to payment" value={revenue.avg_days_to_payment ?? "—"} />
+                </div>
+                {revenueByPayer.length > 0 && (
+                  <div className="mt-3">
+                    <h4 className="font-semibold text-sm mb-1">Revenue breakdown by payer</h4>
+                    <div className="overflow-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-white"><tr>
+                          <th className="px-2 py-1 text-left">Payer</th>
+                          <th className="px-2 py-1 text-right">Visits</th>
+                          <th className="px-2 py-1 text-right">Paid</th>
+                          <th className="px-2 py-1 text-right">RPV</th>
+                        </tr></thead>
+                        <tbody>
+                          {revenueByPayer.map((p: any) => (
+                            <tr key={p.primary_insurance_type} className="border-b border-green-100">
+                              <td className="px-2 py-1">{p.primary_insurance_type}</td>
+                              <td className="px-2 py-1 text-right">{Number(p.visits).toLocaleString()}</td>
+                              <td className="px-2 py-1 text-right font-semibold">{fmtCurrency(Number(p.paid))}</td>
+                              <td className="px-2 py-1 text-right">{fmtCurrency(Number(p.rpv), 2)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                <div className="text-xs text-gray-600 mt-2 italic">
+                  These are real dollars paid per visit, not estimates. Cases may include patients referred by this physician plus their affiliated staff where the Revenue Report matched them by last name.
+                </div>
+              </div>
+            )}
 
             <div className="grid md:grid-cols-2 gap-4">
               <Breakdown title="By clinic" rows={byClinic} cols={[
